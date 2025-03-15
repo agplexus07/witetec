@@ -47,29 +47,16 @@ export class AuthService {
 
   async register(email: string, password: string) {
     try {
-      // Validar formato do email
-      if (!this.isValidEmail(email)) {
-        throw new BadRequestException('Formato de email inválido');
-      }
-
-      // Validar senha
-      if (!this.isValidPassword(password)) {
-        throw new BadRequestException('A senha deve ter no mínimo 8 caracteres, incluindo letras maiúsculas, minúsculas e números');
-      }
-
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: {
-          emailRedirectTo: `https://witetec.com/auth/callback`
-        }
       });
 
       if (error) {
         if (error.message.includes('already registered')) {
           throw new BadRequestException('Email já cadastrado');
         }
-        throw new UnauthorizedException(error.message);
+        throw new BadRequestException(error.message);
       }
 
       logger.info('New user registered', {
@@ -84,7 +71,7 @@ export class AuthService {
         email
       });
       
-      if (error instanceof BadRequestException || error instanceof UnauthorizedException) {
+      if (error instanceof BadRequestException) {
         throw error;
       }
       
@@ -104,17 +91,5 @@ export class AuthService {
       logger.error('Logout error', { error });
       throw error;
     }
-  }
-
-  private isValidEmail(email: string): boolean {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
-  }
-
-  private isValidPassword(password: string): boolean {
-    return password.length >= 8 && 
-           /[A-Z]/.test(password) && 
-           /[a-z]/.test(password) && 
-           /[0-9]/.test(password);
   }
 }
