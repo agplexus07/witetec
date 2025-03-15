@@ -56,7 +56,7 @@ export class AuthService {
         if (error.message.includes('already registered')) {
           throw new BadRequestException('Email já cadastrado');
         }
-        throw new BadRequestException(error.message);
+        throw new UnauthorizedException(error.message);
       }
 
       logger.info('New user registered', {
@@ -70,12 +70,7 @@ export class AuthService {
         error,
         email
       });
-      
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      
-      throw new BadRequestException('Erro ao registrar usuário. Por favor, tente novamente.');
+      throw error;
     }
   }
 
