@@ -6,9 +6,20 @@ import { logger } from '../config/logger.config';
 export class MerchantsService {
   async register(merchantData: any) {
     try {
+      // Obter o usuário autenticado
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !user) {
+        throw new BadRequestException('Usuário não autenticado');
+      }
+
+      // Adicionar o ID do usuário como ID do merchant
       const { data, error } = await supabase
         .from('merchants')
-        .insert([merchantData])
+        .insert([{
+          ...merchantData,
+          id: user.id // Vincular o ID do usuário ao merchant
+        }])
         .select()
         .single();
 

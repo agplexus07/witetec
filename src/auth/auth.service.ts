@@ -1,9 +1,12 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
 
 @Injectable()
 export class AuthService {
+  private lastRegistrationAttempt: number = 0;
+  private readonly REGISTRATION_COOLDOWN = 60000; // 1 minuto em milissegundos
+
   async login(email: string, password: string) {
     try {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -47,20 +50,33 @@ export class AuthService {
 
   async register(email: string, password: string) {
     try {
+      const now = Date.now();
+      if (now - this.lastRegistrationAttempt < this.REGISTRATION_COOLDOWN) {
+        throw new UnauthorizedException('Por favor, aguarde um minuto antes de tentar novamente');
+      }
+      this.lastRegistrationAttempt = now;
+
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          emailRedirectTo: `${process.env.PUBLIC_URL || 'http://localhost:3000'}/auth/callback`
+        }
       });
 
       if (error) {
-        if (error.message.includes('already registered')) {
-          throw new BadRequestException('Email já cadastrado');
+        if (error.message.includes('rate limit')) {
+          throw new UnauthorizedException('Muitas tentativas de registro. Por favor, aguarde alguns minutos.');
         }
         throw new UnauthorizedException(error.message);
       }
 
+      if (!data.user) {
+        throw new UnauthorizedException('Erro ao criar usuário');
+      }
+
       logger.info('New user registered', {
-        userId: data.user?.id,
+        userId: data.user.id,
         email
       });
 
