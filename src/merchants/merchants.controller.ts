@@ -5,21 +5,15 @@ import {
   Get, 
   Param, 
   Put, 
-  UseGuards,
-  UseInterceptors,
-  UploadedFile,
-  ParseFilePipe,
-  MaxFileSizeValidator,
-  FileTypeValidator
+  UseGuards
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
 import { 
   CreateMerchantDto, 
   UpdateMerchantFeeDto, 
   UpdateMerchantStatusDto,
-  UploadDocumentDto
+  MerchantStatisticsDto
 } from './dto/merchant.dto';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
@@ -30,56 +24,49 @@ export class MerchantsController {
   constructor(private readonly merchantsService: MerchantsService) {}
 
   @Post('register')
+  @ApiOperation({ summary: 'Registrar novo comerciante com documentos' })
   async register(@Body() merchantData: CreateMerchantDto) {
     return this.merchantsService.register(merchantData);
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Obter detalhes do comerciante' })
   async getMerchant(@Param('id') id: string) {
     return this.merchantsService.getMerchantById(id);
   }
 
+  @Get(':id/statistics')
+  @ApiOperation({ summary: 'Obter estatísticas do comerciante' })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Estatísticas do comerciante',
+    type: MerchantStatisticsDto 
+  })
+  async getStatistics(@Param('id') id: string): Promise<MerchantStatisticsDto> {
+    return this.merchantsService.getMerchantStatistics(id);
+  }
+
   @Get(':id/dashboard')
+  @ApiOperation({ summary: 'Obter dados do dashboard' })
   async getDashboard(@Param('id') id: string) {
     return this.merchantsService.getDashboardStats(id);
   }
 
   @Put(':id/status')
+  @ApiOperation({ summary: 'Atualizar status do comerciante' })
   async updateStatus(
     @Param('id') id: string,
     @Body() data: UpdateMerchantStatusDto,
   ) {
-    return this.merchantsService.updateMerchantStatus(id, data.status, data.rejectionReason);
+    return this.merchantsService.updateMerchantStatus(id, data.status, data.rejection_reason);
   }
 
   @Put(':id/fee')
+  @ApiOperation({ summary: 'Atualizar taxa do comerciante' })
   async updateFee(
     @Param('id') id: string,
     @Body() data: UpdateMerchantFeeDto,
   ) {
     return this.merchantsService.updateMerchantFee(id, data.feePercentage);
-  }
-
-  @Post(':id/documents')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    description: 'Upload de documento',
-    type: UploadDocumentDto,
-  })
-  async uploadDocument(
-    @Param('id') id: string,
-    @Body() data: UploadDocumentDto,
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), // 5MB
-          new FileTypeValidator({ fileType: '.(pdf|jpg|jpeg|png)' }),
-        ],
-      }),
-    )
-    file: Express.Multer.File,
-  ) {
-    return this.merchantsService.uploadDocument(id, data.type, file);
   }
 }

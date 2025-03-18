@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { MulterModule } from '@nestjs/platform-express';
 import { MerchantsController } from './merchants.controller';
 import { MerchantsService } from './merchants.service';
 
@@ -9,6 +10,11 @@ import { MerchantsService } from './merchants.service';
       ttl: 60000,
       limit: 10,
     }]),
+    MulterModule.register({
+      limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB
+      }
+    })
   ],
   controllers: [MerchantsController],
   providers: [MerchantsService],

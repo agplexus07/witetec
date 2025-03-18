@@ -2,9 +2,13 @@ import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { json } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Configure request size limits
+  app.use(json({ limit: '10mb' })); // Increase JSON body limit to 10MB
 
   const config = new DocumentBuilder()
     .setTitle('Sub-Acquirer API')

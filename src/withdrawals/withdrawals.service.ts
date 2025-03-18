@@ -1,64 +1,159 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
 import { CreateWithdrawalDto, UpdateWithdrawalStatusDto } from './dto/withdrawal.dto';
+import { logger } from '../config/logger.config';
 
 @Injectable()
 export class WithdrawalsService {
-  async createWithdrawal(data: CreateWithdrawalDto) {
-    // Verificar saldo disponível
-    const { data: merchant } = await supabase
-      .from('merchants')
-      .select('balance')
-      .eq('id', data.merchant_id)
-      .single();
+  private readonly WITHDRAWAL_FEE = 6.99;
 
-    if (!merchant) {
-      throw new BadRequestException('Comerciante não encontrado');
+  async createWithdrawal(data: CreateWithdrawalDto, merchantId: string) {
+    try {
+      // Verificar saldo disponível
+      const { data: merchant } = await supabase
+        .from('merchants')
+        .select('balance')
+        .eq('id', merchantId)
+        .single();
+
+      if (!merchant) {
+        throw new BadRequestException('Comerciante não encontrado');
+      }
+
+      const totalAmount = data.amount + this.WITHDRAWAL_FEE;
+
+      if (merchant.balance < totalAmount) {
+        throw new BadRequestException(`Saldo insuficiente. Necessário: R$ ${totalAmount.toFixed(2)} (valor + taxa de R$ ${this.WITHDRAWAL_FEE})`);
+      }
+
+      const { data: withdrawal, error } = await supabase
+        .from('withdrawals')
+        .insert([
+          {
+            merchant_id: merchantId,
+            amount: data.amount,
+            fee_amount: this.WITHDRAWAL_FEE,
+            net_amount: data.amount - this.WITHDRAWAL_FEE,
+            status: 'pending',
+            pix_key_type: data.pix_key_type,
+            pix_key: data.pix_key
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      logger.info('Withdrawal request created', {
+        withdrawalId: withdrawal.id,
+        merchantId,
+        amount: data.amount
+      });
+
+      return withdrawal;
+    } catch (error) {
+      logger.error('Error creating withdrawal', {
+        error,
+        merchantId,
+        amount: data.amount
+      });
+      throw error;
     }
-
-    if (merchant.balance < data.amount) {
-      throw new BadRequestException('Saldo insuficiente');
-    }
-
-    const feeAmount = 2.99; // Taxa fixa por saque
-    const netAmount = data.amount - feeAmount;
-
-    const { data: withdrawal, error } = await supabase
-      .from('withdrawals')
-      .insert([
-        {
-          ...data,
-          fee_amount: feeAmount,
-          net_amount: netAmount,
-          status: 'pending',
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) throw error;
-    return withdrawal;
   }
 
   async updateWithdrawalStatus(id: string, data: UpdateWithdrawalStatusDto) {
-    const { data: withdrawal, error } = await supabase
-      .from('withdrawals')
-      .update({
+    try {
+      const { data: withdrawal, error: getError } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (getError || !withdrawal) {
+        throw new BadRequestException('Saque não encontrado');
+      }
+
+      if (withdrawal.status !== 'pending') {
+        throw new BadRequestException('Este saque já foi processado');
+      }
+
+      const { data: updated, error: updateError } = await supabase
+        .from('withdrawals')
+        .update({
+          status: data.status,
+          processed_at: new Date().toISOString(),
+          rejection_reason: data.rejection_reason
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      // Se aprovado, deduzir do saldo do comerciante
+      if (data.status === 'approved') {
+        const totalDeduction = withdrawal.amount + withdrawal.fee_amount;
+        await this.updateMerchantBalance(withdrawal.merchant_id, -totalDeduction);
+      }
+
+      logger.info('Withdrawal status updated', {
+        withdrawalId: id,
         status: data.status,
-        ...(data.notes && { notes: data.notes }),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+        merchantId: withdrawal.merchant_id
+      });
 
-    if (error) throw error;
-
-    // Se o saque for concluído, atualizar o saldo do comerciante
-    if (data.status === 'completed') {
-      await this.updateMerchantBalance(withdrawal.merchant_id, -withdrawal.amount);
+      return updated;
+    } catch (error) {
+      logger.error('Error updating withdrawal status', {
+        error,
+        withdrawalId: id
+      });
+      throw error;
     }
+  }
 
-    return withdrawal;
+  async getMerchantWithdrawals(merchantId: string) {
+    try {
+      const { data, error } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('merchant_id', merchantId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      return data;
+    } catch (error) {
+      logger.error('Error fetching merchant withdrawals', {
+        error,
+        merchantId
+      });
+      throw error;
+    }
+  }
+
+  async getPendingWithdrawals() {
+    try {
+      const { data, error } = await supabase
+        .from('withdrawals')
+        .select(`
+          *,
+          merchants (
+            company_name,
+            trading_name,
+            cnpj
+          )
+        `)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      return data;
+    } catch (error) {
+      logger.error('Error fetching pending withdrawals', { error });
+      throw error;
+    }
   }
 
   private async updateMerchantBalance(merchantId: string, amount: number) {
@@ -68,16 +163,5 @@ export class WithdrawalsService {
     });
 
     if (error) throw error;
-  }
-
-  async getMerchantWithdrawals(merchantId: string) {
-    const { data, error } = await supabase
-      .from('withdrawals')
-      .select('*')
-      .eq('merchant_id', merchantId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    return data;
   }
 }

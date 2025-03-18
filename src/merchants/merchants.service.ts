@@ -1,36 +1,62 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
+import { MerchantStatisticsDto } from './dto/merchant.dto';
 
 @Injectable()
 export class MerchantsService {
   async register(merchantData: any) {
     try {
-      // Obter o usuário autenticado
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        throw new BadRequestException('Usuário não autenticado');
+      // Criar novo usuário com email/senha
+      const { data: authData, error: signUpError } = await supabase.auth.signUp({
+        email: merchantData.email,
+        password: merchantData.cnpj // Usando CNPJ como senha inicial
+      });
+
+      if (signUpError) {
+        logger.error('Error creating user', {
+          error: signUpError,
+          email: merchantData.email
+        });
+        throw new BadRequestException('Erro ao criar usuário: ' + signUpError.message);
       }
 
-      // Adicionar o ID do usuário como ID do merchant
-      const { data, error } = await supabase
+      if (!authData.user) {
+        throw new BadRequestException('Erro ao criar usuário');
+      }
+
+      // Remover documentos dos dados do comerciante
+      const { documents, ...merchantInfo } = merchantData;
+
+      // Criar o comerciante
+      const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
         .insert([{
-          ...merchantData,
-          id: user.id // Vincular o ID do usuário ao merchant
+          ...merchantInfo,
+          id: authData.user.id,
+          fee_type: 'percentage',
+          fee_percentage: 2.99
         }])
         .select()
         .single();
 
-      if (error) throw error;
+      if (merchantError) {
+        logger.error('Error creating merchant', {
+          error: merchantError,
+          userId: authData.user.id
+        });
+        throw merchantError;
+      }
 
       logger.info('New merchant registered', {
-        merchantId: data.id,
-        companyName: data.company_name
+        merchantId: merchant.id,
+        companyName: merchant.company_name
       });
 
-      return data;
+      return {
+        ...merchant,
+        message: 'Cadastro realizado com sucesso. Aguarde a aprovação.'
+      };
     } catch (error) {
       logger.error('Error registering merchant', {
         error,
@@ -55,6 +81,86 @@ export class MerchantsService {
       logger.error('Error fetching merchant', {
         error,
         merchantId: id
+      });
+      throw error;
+    }
+  }
+
+  async getMerchantStatistics(merchantId: string): Promise<MerchantStatisticsDto> {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      // Buscar transações
+      const { data: transactions, error: txError } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('merchant_id', merchantId)
+        .gte('created_at', thirtyDaysAgo.toISOString());
+
+      if (txError) throw txError;
+
+      // Buscar saldo do merchant
+      const { data: merchant, error: merchantError } = await supabase
+        .from('merchants')
+        .select('balance')
+        .eq('id', merchantId)
+        .single();
+
+      if (merchantError) throw merchantError;
+
+      const stats: MerchantStatisticsDto = {
+        pixToday: 0,
+        pix30Days: 0,
+        totalTransactions: transactions?.length || 0,
+        availableBalance: merchant?.balance || 0,
+        pendingBalance: 0,
+        successRate: 0,
+        averageTicket: 0,
+        chargebackRate: 0
+      };
+
+      if (transactions?.length) {
+        const successful = transactions.filter(tx => tx.status === 'completed');
+        const pending = transactions.filter(tx => tx.status === 'pending');
+        const chargebacks = transactions.filter(tx => tx.status === 'chargeback');
+        
+        // Calcular taxas
+        stats.successRate = (successful.length / transactions.length) * 100;
+        stats.chargebackRate = (chargebacks.length / transactions.length) * 100;
+        
+        // Calcular ticket médio (apenas transações completadas)
+        if (successful.length > 0) {
+          stats.averageTicket = successful.reduce((sum, tx) => sum + tx.amount, 0) / successful.length;
+        }
+
+        // Calcular volumes PIX
+        transactions.forEach(tx => {
+          if (tx.status === 'completed') {
+            const txDate = new Date(tx.created_at);
+            if (txDate >= today) {
+              stats.pixToday += tx.amount;
+            }
+            stats.pix30Days += tx.amount;
+          } else if (tx.status === 'pending') {
+            stats.pendingBalance += tx.amount;
+          }
+        });
+      }
+
+      logger.info('Merchant statistics calculated', {
+        merchantId,
+        stats
+      });
+
+      return stats;
+    } catch (error) {
+      logger.error('Error calculating merchant statistics', {
+        error,
+        merchantId
       });
       throw error;
     }
@@ -113,58 +219,6 @@ export class MerchantsService {
         error,
         merchantId: id,
         feePercentage
-      });
-      throw error;
-    }
-  }
-
-  async uploadDocument(merchantId: string, documentType: string, file: Express.Multer.File) {
-    try {
-      const fileName = `${merchantId}/${documentType}_${Date.now()}${this.getFileExtension(file.originalname)}`;
-      
-      const { data: uploadData, error: uploadError } = await supabase
-        .storage
-        .from('merchant-documents')
-        .upload(fileName, file.buffer, {
-          contentType: file.mimetype,
-          upsert: true
-        });
-
-      if (uploadError) throw uploadError;
-
-      // First get current document URLs
-      const { data: currentMerchant } = await supabase
-        .from('merchants')
-        .select('document_urls')
-        .eq('id', merchantId)
-        .single();
-
-      const { data: merchant, error: updateError } = await supabase
-        .from('merchants')
-        .update({
-          document_urls: { 
-            ...(currentMerchant?.document_urls || {}), 
-            [documentType]: uploadData.path 
-          }
-        })
-        .eq('id', merchantId)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
-
-      logger.info('Document uploaded successfully', {
-        merchantId,
-        documentType,
-        fileName
-      });
-
-      return merchant;
-    } catch (error) {
-      logger.error('Error uploading document', {
-        error,
-        merchantId,
-        documentType
       });
       throw error;
     }
@@ -236,9 +290,5 @@ export class MerchantsService {
       });
       throw error;
     }
-  }
-
-  private getFileExtension(filename: string): string {
-    return filename.substring(filename.lastIndexOf('.'));
   }
 }

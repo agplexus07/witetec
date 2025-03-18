@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNumber, IsUUID, IsOptional, Min } from 'class-validator';
+import { IsString, IsNumber, IsUUID, IsOptional, Min, IsDateString } from 'class-validator';
 
 export class CreateTransactionDto {
   @ApiProperty({
@@ -39,6 +39,140 @@ export class CreateTransactionDto {
   })
   @IsString()
   transaction_id: string;
+
+  @ApiPropertyOptional({
+    description: 'Informações do cliente',
+    example: { name: 'João Silva', email: 'joao@email.com' }
+  })
+  @IsOptional()
+  customer_info?: Record<string, any>;
+}
+
+export class CreatePixDto {
+  @ApiProperty({
+    description: 'Valor do PIX',
+    example: 100.50,
+    minimum: 0.01,
+  })
+  @IsNumber()
+  @Min(0.01)
+  amount: number;
+
+  @ApiPropertyOptional({
+    description: 'Descrição do pagamento',
+    example: 'Pagamento de produto',
+  })
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @ApiPropertyOptional({
+    description: 'Informações do pagador',
+    example: { 
+      name: 'João Silva', 
+      document: '123.456.789-00',
+      email: 'joao@email.com'
+    }
+  })
+  @IsOptional()
+  payer_info?: Record<string, any>;
+}
+
+export class TransactionListQueryDto {
+  @ApiPropertyOptional({
+    description: 'Data inicial',
+    example: '2025-01-01'
+  })
+  @IsDateString()
+  @IsOptional()
+  start_date?: string;
+
+  @ApiPropertyOptional({
+    description: 'Data final',
+    example: '2025-12-31'
+  })
+  @IsDateString()
+  @IsOptional()
+  end_date?: string;
+
+  @ApiPropertyOptional({
+    description: 'Status da transação',
+    example: 'completed',
+    enum: ['pending', 'completed', 'failed', 'chargeback']
+  })
+  @IsString()
+  @IsOptional()
+  status?: 'pending' | 'completed' | 'failed' | 'chargeback';
+}
+
+export class TransactionResponseDto {
+  @ApiProperty({
+    description: 'ID da transação',
+    example: 'uuid'
+  })
+  id: string;
+
+  @ApiProperty({
+    description: 'Data da transação',
+    example: '2025-01-01T10:00:00Z'
+  })
+  created_at: string;
+
+  @ApiProperty({
+    description: 'Informações do cliente',
+    example: { name: 'João Silva', email: 'joao@email.com' }
+  })
+  customer_info: Record<string, any>;
+
+  @ApiProperty({
+    description: 'Valor da transação',
+    example: 100.50
+  })
+  amount: number;
+
+  @ApiProperty({
+    description: 'Status da transação',
+    example: 'completed',
+    enum: ['pending', 'completed', 'failed', 'chargeback']
+  })
+  status: string;
+}
+
+export class TransactionDetailsDto extends TransactionResponseDto {
+  @ApiProperty({
+    description: 'Valor da taxa',
+    example: 2.99
+  })
+  fee_amount: number;
+
+  @ApiProperty({
+    description: 'Valor líquido',
+    example: 97.51
+  })
+  net_amount: number;
+
+  @ApiProperty({
+    description: 'Chave PIX',
+    example: 'exemplo@email.com'
+  })
+  pix_key: string;
+
+  @ApiProperty({
+    description: 'Dados do PIX',
+    example: {
+      qr_code: 'string',
+      qr_code_image: 'url',
+      payment_link: 'url',
+      expires_at: '2025-01-01T11:00:00Z'
+    }
+  })
+  pix_data: Record<string, any>;
+
+  @ApiProperty({
+    description: 'Descrição',
+    example: 'Pagamento de produto'
+  })
+  description: string;
 }
 
 export class UpdateTransactionStatusDto {

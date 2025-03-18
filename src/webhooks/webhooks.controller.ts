@@ -1,0 +1,46 @@
+import { Controller, Post, Get, Body, Param, Headers, UseGuards } from '@nestjs/common';
+import { WebhooksService } from './webhooks.service';
+import { CreateWebhookDto, OnzWebhookDto } from './dto/webhook.dto';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ThrottlerGuard } from '@nestjs/throttler';
+
+@ApiTags('webhooks')
+@ApiBearerAuth()
+@Controller('webhooks')
+@UseGuards(ThrottlerGuard)
+export class WebhooksController {
+  constructor(private readonly webhooksService: WebhooksService) {}
+
+  @Post('onz/pix')
+  @ApiOperation({ summary: 'Receber notificação de pagamento PIX da ONZ' })
+  async handleOnzWebhook(
+    @Body() data: OnzWebhookDto,
+    @Headers('x-webhook-signature') signature: string
+  ) {
+    return this.webhooksService.handleOnzWebhook(data, signature);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'Listar todos os webhooks' })
+  async getAllWebhooks() {
+    return this.webhooksService.getAllWebhooks();
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Criar nova configuração de webhook' })
+  async createWebhook(@Body() data: CreateWebhookDto) {
+    return this.webhooksService.createWebhook(data);
+  }
+
+  @Get('merchant/:merchantId')
+  @ApiOperation({ summary: 'Listar webhooks do comerciante' })
+  async getMerchantWebhooks(@Param('merchantId') merchantId: string) {
+    return this.webhooksService.getMerchantWebhooks(merchantId);
+  }
+
+  @Post('test/:id')
+  @ApiOperation({ summary: 'Testar webhook' })
+  async testWebhook(@Param('id') id: string) {
+    return this.webhooksService.testWebhook(id);
+  }
+}

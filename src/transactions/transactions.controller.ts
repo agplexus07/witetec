@@ -1,14 +1,65 @@
-import { Controller, Post, Body, Get, Param, Put } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Put, Query, UseGuards, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { TransactionsService } from './transactions.service';
-import { CreateTransactionDto, UpdateTransactionStatusDto } from './dto/transaction.dto';
+import { 
+  CreateTransactionDto, 
+  UpdateTransactionStatusDto,
+  TransactionListQueryDto,
+  TransactionResponseDto,
+  TransactionDetailsDto,
+  CreatePixDto
+} from './dto/transaction.dto';
+import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
+import { ApiKeyGuard } from '../api-keys/api-key.guard';
 
+@ApiTags('transactions')
 @Controller('transactions')
 export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
-  @Post()
-  async createTransaction(@Body() data: CreateTransactionDto) {
-    return this.transactionsService.createTransaction(data);
+  @Post('pix/create')
+  @UseGuards(ApiKeyGuard)
+  @ApiOperation({ summary: 'Gerar cobrança PIX' })
+  @ApiHeader({
+    name: 'x-api-key',
+    description: 'Chave de API',
+    required: true
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'QR Code PIX gerado com sucesso',
+    type: TransactionResponseDto
+  })
+  async createPix(
+    @Body() data: CreatePixDto,
+    @Req() request: Request & { merchantId: string }
+  ) {
+    return this.transactionsService.createPixTransaction(data, request.merchantId);
+  }
+
+  @Get('merchant/:merchantId')
+  @ApiOperation({ summary: 'Listar transações do comerciante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de transações',
+    type: [TransactionResponseDto]
+  })
+  async getMerchantTransactions(
+    @Param('merchantId') merchantId: string,
+    @Query() query: TransactionListQueryDto
+  ) {
+    return this.transactionsService.getMerchantTransactions(merchantId, query);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Obter detalhes da transação' })
+  @ApiResponse({
+    status: 200,
+    description: 'Detalhes da transação',
+    type: TransactionDetailsDto
+  })
+  async getTransactionDetails(@Param('id') id: string) {
+    return this.transactionsService.getTransactionDetails(id);
   }
 
   @Put(':id/status')
@@ -17,10 +68,5 @@ export class TransactionsController {
     @Body() data: UpdateTransactionStatusDto,
   ) {
     return this.transactionsService.updateTransactionStatus(id, data);
-  }
-
-  @Get('merchant/:merchantId')
-  async getMerchantTransactions(@Param('merchantId') merchantId: string) {
-    return this.transactionsService.getMerchantTransactions(merchantId);
   }
 }

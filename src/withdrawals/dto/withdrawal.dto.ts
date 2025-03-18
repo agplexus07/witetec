@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNumber, IsUUID, IsOptional, Min } from 'class-validator';
+import { IsString, IsNumber, IsUUID, IsOptional, Min, IsEnum } from 'class-validator';
 
 export class CreateWithdrawalDto {
   @ApiProperty({
@@ -12,42 +12,61 @@ export class CreateWithdrawalDto {
   amount: number;
 
   @ApiProperty({
-    description: 'ID do comerciante',
-    example: '123e4567-e89b-12d3-a456-426614174000',
+    description: 'Tipo da chave PIX',
+    example: 'cpf',
+    enum: ['cpf', 'cnpj', 'email', 'telefone', 'aleatoria']
   })
-  @IsUUID()
-  merchant_id: string;
+  @IsEnum(['cpf', 'cnpj', 'email', 'telefone', 'aleatoria'])
+  pix_key_type: string;
 
   @ApiProperty({
-    description: 'Chave PIX para recebimento',
+    description: 'Chave PIX',
     example: 'exemplo@email.com',
   })
   @IsString()
   pix_key: string;
-
-  @ApiPropertyOptional({
-    description: 'Observações',
-    example: 'Saque mensal',
-  })
-  @IsString()
-  @IsOptional()
-  notes?: string;
 }
 
 export class UpdateWithdrawalStatusDto {
   @ApiProperty({
     description: 'Status do saque',
-    example: 'completed',
-    enum: ['processing', 'completed', 'failed'],
+    example: 'approved',
+    enum: ['approved', 'rejected'],
   })
-  @IsString()
-  status: 'processing' | 'completed' | 'failed';
+  @IsEnum(['approved', 'rejected'])
+  status: 'approved' | 'rejected';
 
   @ApiPropertyOptional({
-    description: 'Observações adicionais',
-    example: 'Processado com sucesso',
+    description: 'Motivo da rejeição',
+    example: 'Dados incorretos',
   })
   @IsString()
   @IsOptional()
-  notes?: string;
+  rejection_reason?: string;
+}
+
+export class WithdrawalResponseDto {
+  @ApiProperty({ example: 'uuid' })
+  id: string;
+
+  @ApiProperty({ example: '2025-03-17T10:00:00Z' })
+  created_at: string;
+
+  @ApiProperty({ example: 1000.00 })
+  amount: number;
+
+  @ApiProperty({ example: 993.01 })
+  net_amount: number;
+
+  @ApiProperty({ example: 6.99 })
+  fee_amount: number;
+
+  @ApiProperty({ example: 'pending' })
+  status: string;
+
+  @ApiProperty({ example: 'cpf' })
+  pix_key_type: string;
+
+  @ApiProperty({ example: '123.456.789-00' })
+  pix_key: string;
 }

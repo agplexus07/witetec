@@ -72,6 +72,56 @@ export class CreateMerchantDto {
   postal_code?: string;
 }
 
+export class MerchantStatisticsDto {
+  @ApiProperty({
+    description: 'Volume PIX do dia',
+    example: 1000.00
+  })
+  pixToday: number;
+
+  @ApiProperty({
+    description: 'Volume PIX dos últimos 30 dias',
+    example: 15000.00
+  })
+  pix30Days: number;
+
+  @ApiProperty({
+    description: 'Total de transações',
+    example: 150
+  })
+  totalTransactions: number;
+
+  @ApiProperty({
+    description: 'Saldo disponível para saque',
+    example: 5000.00
+  })
+  availableBalance: number;
+
+  @ApiProperty({
+    description: 'Saldo pendente',
+    example: 1000.00
+  })
+  pendingBalance: number;
+
+  @ApiProperty({
+    description: 'Taxa de sucesso (%)',
+    example: 98.5
+  })
+  successRate: number;
+
+  @ApiProperty({
+    description: 'Ticket médio',
+    example: 250.00
+  })
+  averageTicket: number;
+
+  @ApiProperty({
+    description: 'Taxa de chargeback (%)',
+    example: 0.5
+  })
+  chargebackRate: number;
+}
+
 export class UpdateMerchantFeeDto {
   @ApiProperty({
     description: 'Percentual da taxa',
@@ -91,7 +141,7 @@ export class UpdateMerchantStatusDto {
     example: 'approved',
     enum: ['approved', 'rejected'],
   })
-  @IsString()
+  @IsEnum(['approved', 'rejected'])
   status: 'approved' | 'rejected';
 
   @ApiPropertyOptional({
@@ -100,21 +150,5 @@ export class UpdateMerchantStatusDto {
   })
   @IsString()
   @IsOptional()
-  rejectionReason?: string;
-}
-
-export class UploadDocumentDto {
-  @ApiProperty({
-    description: 'Tipo do documento',
-    enum: ['cnpj', 'id', 'proof_of_address', 'bank_statement'],
-  })
-  @IsEnum(['cnpj', 'id', 'proof_of_address', 'bank_statement'])
-  type: string;
-
-  @ApiProperty({
-    description: 'Arquivo do documento',
-    type: 'string',
-    format: 'binary',
-  })
-  file: any;
+  rejection_reason?: string;
 }

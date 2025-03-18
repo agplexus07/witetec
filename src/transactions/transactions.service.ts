@@ -1,95 +1,262 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
-import { CreateTransactionDto, UpdateTransactionStatusDto } from './dto/transaction.dto';
+import { 
+  CreateTransactionDto, 
+  UpdateTransactionStatusDto,
+  TransactionListQueryDto,
+  CreatePixDto
+} from './dto/transaction.dto';
 import { PixService } from '../pix/pix.service';
+import { logger } from '../config/logger.config';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class TransactionsService {
   constructor(private readonly pixService: PixService) {}
 
-  async createTransaction(data: CreateTransactionDto) {
-    // Calcular taxa e valor líquido
-    const { data: merchant } = await supabase
-      .from('merchants')
-      .select('fee_percentage')
-      .eq('id', data.merchant_id)
-      .single();
+  async createPixTransaction(data: CreatePixDto, merchantId: string) {
+    try {
+      logger.info('Starting PIX transaction creation', {
+        amount: data.amount,
+        description: data.description,
+        hasPayerInfo: !!data.payer_info,
+        merchantId
+      });
 
-    if (!merchant) {
-      throw new BadRequestException('Comerciante não encontrado');
-    }
+      // Gerar ID único para a transação
+      const transactionId = randomUUID();
+      logger.info('Generated transaction ID', { transactionId });
 
-    const feeAmount = (data.amount * merchant.fee_percentage) / 100;
-    const netAmount = data.amount - feeAmount;
+      // Buscar configuração de taxa do comerciante
+      const { data: merchant } = await supabase
+        .from('merchants')
+        .select('fee_type, fee_amount, fee_percentage')
+        .eq('id', merchantId)
+        .single();
 
-    // Gerar cobrança PIX
-    const pixCharge = await this.pixService.createPixCharge({
-      amount: data.amount,
-      merchantId: data.merchant_id,
-      description: data.description,
-      transactionId: data.transaction_id
-    });
+      if (!merchant) {
+        throw new BadRequestException('Comerciante não encontrado');
+      }
 
-    const { data: transaction, error } = await supabase
-      .from('transactions')
-      .insert([
-        {
-          ...data,
-          fee_amount: feeAmount,
-          net_amount: netAmount,
-          status: 'pending',
-          pix_data: {
-            qr_code: pixCharge.qrCode,
-            qr_code_image: pixCharge.qrCodeImage,
-            payment_link: pixCharge.paymentLinkUrl,
-            expires_at: pixCharge.expiresAt
+      // Calcular taxa baseado no tipo (fixo ou percentual)
+      let feeAmount = 0;
+      if (merchant.fee_type === 'fixed') {
+        feeAmount = (merchant.fee_amount || 0) / 100; // Converter centavos para reais
+      } else {
+        feeAmount = (data.amount * (merchant.fee_percentage || 0)) / 100;
+      }
+
+      const netAmount = data.amount - feeAmount;
+
+      // Gerar cobrança PIX usando o serviço ONZ
+      const pixCharge = await this.pixService.createPixCharge({
+        amount: data.amount,
+        transactionId,
+        description: data.description || 'Pagamento PIX',
+        customerInfo: data.payer_info,
+        merchantId
+      });
+
+      // Calcular data de expiração (1 hora a partir de agora)
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 1);
+
+      // Salvar transação no banco
+      const { data: transaction, error } = await supabase
+        .from('transactions')
+        .insert([
+          {
+            merchant_id: merchantId,
+            transaction_id: transactionId,
+            amount: data.amount,
+            fee_amount: feeAmount,
+            net_amount: netAmount,
+            status: 'pending',
+            description: data.description,
+            customer_info: data.payer_info,
+            expires_at: expiresAt.toISOString(),
+            pix_data: {
+              qr_code: pixCharge.qrCode,
+              payment_link: pixCharge.paymentLinkUrl,
+              expires_at: expiresAt.toISOString()
+            },
+            pix_key: transactionId
           }
-        },
-      ])
-      .select()
-      .single();
+        ])
+        .select()
+        .single();
 
-    if (error) throw error;
-    return transaction;
+      if (error) throw error;
+
+      logger.info('PIX transaction created successfully', {
+        transactionId,
+        merchantId,
+        amount: data.amount,
+        feeAmount,
+        expiresAt
+      });
+
+      // Retornar apenas os dados necessários para o cliente
+      return {
+        transaction_id: transactionId,
+        amount: data.amount,
+        fee_amount: feeAmount,
+        net_amount: netAmount,
+        pix: {
+          qr_code: pixCharge.qrCode,
+          payment_link: pixCharge.paymentLinkUrl,
+          expires_at: expiresAt.toISOString()
+        }
+      };
+    } catch (error) {
+      logger.error('Error in PIX transaction creation', {
+        error: {
+          message: error.message,
+          code: error.code,
+          response: error.response?.data,
+          stack: error.stack,
+        },
+        amount: data.amount,
+        description: data.description,
+        merchantId
+      });
+      throw error;
+    }
   }
 
   async updateTransactionStatus(id: string, data: UpdateTransactionStatusDto) {
-    const { data: transaction, error } = await supabase
-      .from('transactions')
-      .update({ status: data.status })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      // Buscar transação atual
+      const { data: currentTransaction, error: fetchError } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    if (error) throw error;
+      if (fetchError || !currentTransaction) {
+        throw new NotFoundException('Transação não encontrada');
+      }
 
-    // Se a transação for concluída, atualizar o saldo do comerciante
-    if (data.status === 'completed') {
-      await this.updateMerchantBalance(transaction.merchant_id, transaction.net_amount);
-    }
+      // Verificar se já não está em um estado final
+      if (['completed', 'failed'].includes(currentTransaction.status)) {
+        throw new BadRequestException('Transação já está em estado final');
+      }
 
-    // Se for chargeback, criar reembolso PIX
-    if (data.status === 'chargeback') {
-      await this.pixService.refundPix({
-        transactionId: transaction.transaction_id,
-        amount: transaction.amount,
-        reason: 'Chargeback solicitado'
+      // Se a transação estiver expirada mas recebemos confirmação de pagamento, permitir a atualização
+      if (currentTransaction.status === 'expired' && data.status !== 'completed') {
+        throw new BadRequestException('Transação expirada não pode ser atualizada');
+      }
+
+      // Atualizar status
+      const { data: transaction, error } = await supabase
+        .from('transactions')
+        .update({ 
+          status: data.status,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Se a transação foi completada, atualizar o saldo do comerciante
+      if (data.status === 'completed' && currentTransaction.status !== 'completed') {
+        await this.updateMerchantBalance(transaction.merchant_id, transaction.net_amount);
+        logger.info('Merchant balance updated after successful transaction', {
+          merchantId: transaction.merchant_id,
+          amount: transaction.net_amount
+        });
+      }
+
+      logger.info('Transaction status updated', {
+        transactionId: id,
+        oldStatus: currentTransaction.status,
+        newStatus: data.status
       });
-    }
 
-    return transaction;
+      return transaction;
+    } catch (error) {
+      logger.error('Error updating transaction status', {
+        error,
+        transactionId: id,
+        status: data.status
+      });
+      throw error;
+    }
   }
 
-  async checkTransactionStatus(transactionId: string) {
-    const pixStatus = await this.pixService.getPixStatus(transactionId);
-    
-    if (pixStatus.status === 'COMPLETED') {
-      await this.updateTransactionStatus(transactionId, { status: 'completed' });
-    } else if (pixStatus.status === 'EXPIRED' || pixStatus.status === 'CANCELLED') {
-      await this.updateTransactionStatus(transactionId, { status: 'failed' });
-    }
+  async getMerchantTransactions(merchantId: string, query: TransactionListQueryDto) {
+    try {
+      let dbQuery = supabase
+        .from('transactions')
+        .select('id, created_at, customer_info, amount, status, expires_at')
+        .eq('merchant_id', merchantId)
+        .order('created_at', { ascending: false });
 
-    return pixStatus;
+      if (query.start_date) {
+        dbQuery = dbQuery.gte('created_at', query.start_date);
+      }
+
+      if (query.end_date) {
+        dbQuery = dbQuery.lte('created_at', query.end_date);
+      }
+
+      if (query.status) {
+        dbQuery = dbQuery.eq('status', query.status);
+      }
+
+      const { data, error } = await dbQuery;
+
+      if (error) throw error;
+
+      logger.info('Transactions retrieved', {
+        merchantId,
+        count: data?.length
+      });
+
+      return data;
+    } catch (error) {
+      logger.error('Error retrieving transactions', {
+        error,
+        merchantId
+      });
+      throw error;
+    }
+  }
+
+  async getTransactionDetails(id: string) {
+    try {
+      const { data: transaction, error } = await supabase
+        .from('transactions')
+        .select(`
+          *,
+          merchants (
+            company_name,
+            trading_name,
+            cnpj
+          )
+        `)
+        .eq('id', id)
+        .single();
+
+      if (error || !transaction) {
+        throw new NotFoundException('Transação não encontrada');
+      }
+
+      logger.info('Transaction details retrieved', {
+        transactionId: id,
+        status: transaction.status
+      });
+
+      return transaction;
+    } catch (error) {
+      logger.error('Error retrieving transaction details', {
+        error,
+        transactionId: id
+      });
+      throw error;
+    }
   }
 
   private async updateMerchantBalance(merchantId: string, amount: number) {
@@ -99,16 +266,5 @@ export class TransactionsService {
     });
 
     if (error) throw error;
-  }
-
-  async getMerchantTransactions(merchantId: string) {
-    const { data, error } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('merchant_id', merchantId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    return data;
   }
 }
