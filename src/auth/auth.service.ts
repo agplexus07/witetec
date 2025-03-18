@@ -157,7 +157,7 @@ export class AuthService {
         email,
         password,
         options: {
-          emailRedirectTo: `${process.env.PUBLIC_URL || 'http://localhost:3000'}/auth/callback`
+          emailRedirectTo: `${process.env.PUBLIC_URL || 'https://witetec.com.br'}/auth/callback`
         }
       });
 

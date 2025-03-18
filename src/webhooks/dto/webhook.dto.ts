@@ -13,7 +13,12 @@ export class CreateWebhookDto {
     description: 'URL do webhook',
     example: 'https://api.seusite.com.br/webhooks/pix'
   })
-  @IsUrl()
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    require_valid_protocol: true,
+    protocols: ['http', 'https']
+  })
   url: string;
 
   @ApiPropertyOptional({

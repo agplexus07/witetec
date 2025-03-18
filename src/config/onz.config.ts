@@ -197,7 +197,7 @@ interface PixListReceivedParams {
   cpf?: string
   cnpj?: string
   paginacao: {
-    paginaAtual: number
+    pagina: number // Changed from paginaAtual
     itensPorPagina: number
   }
 }
@@ -308,7 +308,19 @@ const getPixStatus = async (txid: string) => {
 
 const listReceivedPix = async (params: PixListReceivedParams) => {
   try {
-    const response = await axiosInstance.get(`${API_URL}/pix`, { params });
+    // Construct query parameters according to API requirements
+    const queryParams = new URLSearchParams({
+      inicio: params.inicio,
+      fim: params.fim,
+      'paginacao.pagina': params.paginacao.pagina.toString(),
+      'paginacao.itensPorPagina': params.paginacao.itensPorPagina.toString()
+    });
+
+    if (params.txid) queryParams.append('txid', params.txid);
+    if (params.cpf) queryParams.append('cpf', params.cpf);
+    if (params.cnpj) queryParams.append('cnpj', params.cnpj);
+
+    const response = await axiosInstance.get(`${API_URL}/pix?${queryParams.toString()}`);
     return response.data;
   } catch (error) {
     logger.error("Erro ao listar PIX recebidos", {

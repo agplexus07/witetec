@@ -7,7 +7,8 @@ import {
   TransactionListQueryDto,
   TransactionResponseDto,
   TransactionDetailsDto,
-  CreatePixDto
+  CreatePixDto,
+  CheckPixStatusDto
 } from './dto/transaction.dto';
 import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
 import { ApiKeyGuard } from '../api-keys/api-key.guard';
@@ -35,6 +36,16 @@ export class TransactionsController {
     @Req() request: Request & { merchantId: string }
   ) {
     return this.transactionsService.createPixTransaction(data, request.merchantId);
+  }
+
+  @Post('pix/check-status')
+  @ApiOperation({ summary: 'Verificar status do pagamento PIX' })
+  @ApiResponse({
+    status: 200,
+    description: 'Status do PIX consultado com sucesso'
+  })
+  async checkPixStatus(@Body() data: CheckPixStatusDto) {
+    return this.transactionsService.checkPixStatus(data.txid);
   }
 
   @Get('merchant/:merchantId')

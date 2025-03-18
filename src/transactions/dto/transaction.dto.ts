@@ -78,6 +78,15 @@ export class CreatePixDto {
   payer_info?: Record<string, any>;
 }
 
+export class CheckPixStatusDto {
+  @ApiProperty({
+    description: 'ID da transação PIX',
+    example: '4eeedc7f-35a3-42fd-96a3-3cd8a2340ddb'
+  })
+  @IsString()
+  txid: string;
+}
+
 export class TransactionListQueryDto {
   @ApiPropertyOptional({
     description: 'Data inicial',

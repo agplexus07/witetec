@@ -3,6 +3,7 @@ import { WebhooksService } from './webhooks.service';
 import { CreateWebhookDto, OnzWebhookDto } from './dto/webhook.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { logger } from '../config/logger.config';
 
 @ApiTags('webhooks')
 @ApiBearerAuth()
@@ -14,10 +15,36 @@ export class WebhooksController {
   @Post('onz/pix')
   @ApiOperation({ summary: 'Receber notificação de pagamento PIX da ONZ' })
   async handleOnzWebhook(
-    @Body() data: OnzWebhookDto,
+    @Body() data: any,
     @Headers('x-webhook-signature') signature: string
   ) {
-    return this.webhooksService.handleOnzWebhook(data, signature);
+    try {
+      logger.info('Webhook ONZ recebido', { 
+        data,
+        hasSignature: !!signature 
+      });
+
+      // Mapear os dados recebidos para nosso formato
+      const pixData: OnzWebhookDto = {
+        txid: data.txid,
+        valor: data.valor,
+        horario: data.horario,
+        pagador: data.pagador,
+        endToEndId: data.endToEndId
+      };
+
+      const result = await this.webhooksService.handleOnzWebhook(pixData, signature);
+      
+      logger.info('Webhook ONZ processado com sucesso', { result });
+      
+      return result;
+    } catch (error) {
+      logger.error('Erro ao processar webhook ONZ', { 
+        error,
+        data 
+      });
+      throw error;
+    }
   }
 
   @Get()

@@ -77,6 +77,30 @@ export class WebhooksService {
 
   async createWebhook(data: CreateWebhookDto) {
     try {
+      // Validar se o comerciante existe
+      const { data: merchant, error: merchantError } = await supabase
+        .from('merchants')
+        .select('id, status')
+        .eq('id', data.merchant_id)
+        .single();
+
+      if (merchantError || !merchant) {
+        logger.error('Merchant not found', { merchantId: data.merchant_id });
+        throw new BadRequestException('Comerciante não encontrado');
+      }
+
+      if (merchant.status !== 'approved') {
+        throw new BadRequestException('Comerciante precisa estar aprovado para configurar webhooks');
+      }
+
+      // Validar URL
+      try {
+        new URL(data.url);
+      } catch (error) {
+        logger.error('Invalid webhook URL', { url: data.url });
+        throw new BadRequestException('URL do webhook inválida');
+      }
+
       const secretToken = randomBytes(32).toString('hex');
 
       const { data: webhook, error } = await supabase
@@ -93,7 +117,15 @@ export class WebhooksService {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        logger.error('Error creating webhook', { error, data });
+        throw new BadRequestException('Erro ao criar webhook: ' + error.message);
+      }
+
+      logger.info('Webhook created successfully', {
+        webhookId: webhook.id,
+        merchantId: data.merchant_id
+      });
 
       // Retornar o token secreto apenas na criação
       return {
@@ -101,7 +133,11 @@ export class WebhooksService {
         secret_token: secretToken,
       };
     } catch (error) {
-      throw new BadRequestException('Erro ao criar webhook');
+      logger.error('Error in createWebhook', { error, data });
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException('Erro ao criar webhook: ' + error.message);
     }
   }
 
@@ -158,6 +194,12 @@ export class WebhooksService {
 
       return { success: true, message: 'Webhook testado com sucesso' };
     } catch (error) {
+      logger.error('Error testing webhook', {
+        error,
+        webhookId: id,
+        url: webhook.url
+      });
+
       await supabase
         .from('webhooks')
         .update({
@@ -165,7 +207,7 @@ export class WebhooksService {
         })
         .eq('id', id);
 
-      throw new BadRequestException('Erro ao testar webhook');
+      throw new BadRequestException(`Erro ao testar webhook: ${error.message}`);
     }
   }
 
@@ -201,6 +243,13 @@ export class WebhooksService {
           })
           .eq('id', webhook.id);
       } catch (error) {
+        logger.error('Error sending webhook event', {
+          error,
+          webhookId: webhook.id,
+          event,
+          url: webhook.url
+        });
+
         await supabase
           .from('webhooks')
           .update({

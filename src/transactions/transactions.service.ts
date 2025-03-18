@@ -4,7 +4,8 @@ import {
   CreateTransactionDto, 
   UpdateTransactionStatusDto,
   TransactionListQueryDto,
-  CreatePixDto
+  CreatePixDto,
+  CheckPixStatusDto
 } from './dto/transaction.dto';
 import { PixService } from '../pix/pix.service';
 import { logger } from '../config/logger.config';
@@ -79,8 +80,7 @@ export class TransactionsService {
               qr_code: pixCharge.qrCode,
               payment_link: pixCharge.paymentLinkUrl,
               expires_at: expiresAt.toISOString()
-            },
-            pix_key: transactionId
+            }
           }
         ])
         .select()
@@ -96,7 +96,6 @@ export class TransactionsService {
         expiresAt
       });
 
-      // Retornar apenas os dados necessários para o cliente
       return {
         transaction_id: transactionId,
         amount: data.amount,
@@ -119,6 +118,55 @@ export class TransactionsService {
         amount: data.amount,
         description: data.description,
         merchantId
+      });
+      throw error;
+    }
+  }
+
+  async checkPixStatus(txid: string) {
+    try {
+      logger.info('Checking PIX status', { txid });
+
+      // Buscar transação no banco
+      const { data: transaction, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('transaction_id', txid)
+        .single();
+
+      if (error || !transaction) {
+        throw new NotFoundException('Transação não encontrada');
+      }
+
+      // Consultar status na ONZ
+      const pixStatus = await this.pixService.getPixStatus(txid);
+
+      // Se o status mudou, atualizar no banco
+      if (pixStatus.status !== transaction.status) {
+        await this.updateTransactionStatus(transaction.id, {
+          status: pixStatus.status
+        });
+      }
+
+      logger.info('PIX status checked', {
+        txid,
+        status: pixStatus.status,
+        paidAmount: pixStatus.paidAmount,
+        paidAt: pixStatus.paidAt
+      });
+
+      return {
+        transaction_id: txid,
+        status: pixStatus.status,
+        amount: transaction.amount,
+        paid_amount: pixStatus.paidAmount,
+        paid_at: pixStatus.paidAt,
+        end_to_end_id: transaction.end_to_end_id
+      };
+    } catch (error) {
+      logger.error('Error checking PIX status', {
+        error,
+        txid
       });
       throw error;
     }
@@ -190,7 +238,7 @@ export class TransactionsService {
     try {
       let dbQuery = supabase
         .from('transactions')
-        .select('id, created_at, customer_info, amount, status, expires_at')
+        .select('id, created_at, customer_info, amount, status, expires_at, end_to_end_id, paid_at, payer_info')
         .eq('merchant_id', merchantId)
         .order('created_at', { ascending: false });
 

@@ -121,10 +121,15 @@ export class PixService {
     try {
       logger.info('Getting received PIX', { params });
 
+      // Obter token de acesso
       const accessToken = await onzClient.getAccessToken();
       if (!accessToken) {
         throw new Error('Não foi possível obter o token de acesso');
       }
+
+      logger.debug('Access token obtained for received PIX check', {
+        tokenLength: accessToken.length
+      });
 
       const receivedPix = await onzClient.pix.listReceived({
         inicio: params.startDate.toISOString(),
@@ -133,7 +138,7 @@ export class PixService {
         cpf: params.cpf,
         cnpj: params.cnpj,
         paginacao: {
-          paginaAtual: params.page || 0,
+          pagina: params.page || 1, // Changed from paginaAtual to pagina and default to 1
           itensPorPagina: params.pageSize || 100
         }
       });
