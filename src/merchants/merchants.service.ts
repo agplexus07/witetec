@@ -2,13 +2,15 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
 import { 
-  CreateMerchantDto, 
-  SubmitMerchantDocumentsDto,
+  CreateMerchantDto,
   MerchantStatisticsDto 
 } from './dto/merchant.dto';
 
 @Injectable()
 export class MerchantsService {
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY = 2000; // 2 segundos
+
   async register(merchantData: CreateMerchantDto) {
     try {
       logger.info('Iniciando registro de comerciante', {
@@ -20,81 +22,158 @@ export class MerchantsService {
       const requiredFields = [
         'company_name',
         'cnpj',
-        'email'
+        'email',
+        'contract_document',
+        'cnpj_document',
+        'identity_document',
+        'identity_selfie',
+        'bank_document'
       ];
 
       const missingFields = requiredFields.filter(field => !merchantData[field]);
       if (missingFields.length > 0) {
         logger.error('Campos obrigatórios faltando', { missingFields });
-        throw new BadRequestException(`Campos obrigatórios faltando: ${missingFields.join(', ')}`);
-      }
-
-      // Criar novo usuário com email/senha
-      logger.info('Criando usuário no Supabase Auth', { email: merchantData.email });
-      
-      const { data: authData, error: signUpError } = await supabase.auth.signUp({
-        email: merchantData.email,
-        password: merchantData.cnpj // Usando CNPJ como senha inicial
-      });
-
-      if (signUpError) {
-        logger.error('Erro ao criar usuário no Supabase Auth', {
-          error: signUpError,
-          email: merchantData.email
+        throw new BadRequestException({
+          code: 'MISSING_FIELDS',
+          message: `Campos obrigatórios faltando: ${missingFields.join(', ')}`,
+          fields: missingFields
         });
-        
-        if (signUpError.message.includes('User already registered')) {
-          throw new BadRequestException('Email já cadastrado. Por favor, use outro email.');
+      }
+
+      // Validar tamanho dos documentos antes de tentar upload
+      for (const docField of ['contract_document', 'cnpj_document', 'identity_document', 'identity_selfie', 'bank_document']) {
+        const base64Data = merchantData[docField].split(',')[1] || merchantData[docField];
+        const sizeInMB = (base64Data.length * 0.75) / 1024 / 1024; // Converter para MB
+        if (sizeInMB > 5) {
+          throw new BadRequestException({
+            code: 'FILE_TOO_LARGE',
+            message: `O documento ${docField} excede o tamanho máximo de 5MB`,
+            field: docField
+          });
         }
-        
-        throw new BadRequestException('Erro ao criar usuário: ' + signUpError.message);
       }
 
-      if (!authData.user) {
-        logger.error('Usuário não criado no Supabase Auth', { email: merchantData.email });
-        throw new BadRequestException('Erro ao criar usuário');
+      // Criar novo usuário com email/senha com retentativas
+      let authData;
+      for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+        try {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email: merchantData.email,
+            password: merchantData.cnpj
+          });
+
+          if (error) {
+            if (error.message.includes('User already registered')) {
+              throw new BadRequestException({
+                code: 'EMAIL_IN_USE',
+                message: 'Email já cadastrado. Por favor, use outro email.',
+                field: 'email'
+              });
+            }
+            throw error;
+          }
+
+          authData = data;
+          break;
+        } catch (error) {
+          if (attempt === this.MAX_RETRIES) {
+            logger.error('Todas as tentativas de criar usuário falharam', {
+              error,
+              email: merchantData.email,
+              attempts: attempt
+            });
+            throw new BadRequestException({
+              code: 'AUTH_ERROR',
+              message: 'Erro ao criar usuário. Por favor, tente novamente.',
+              details: error.message
+            });
+          }
+          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+        }
       }
 
-      logger.info('Usuário criado com sucesso', {
-        userId: authData.user.id,
-        email: merchantData.email
-      });
-
-      // Criar o comerciante
-      logger.info('Criando registro do comerciante', {
-        userId: authData.user.id,
-        companyName: merchantData.company_name
-      });
-
-      const { data: merchant, error: merchantError } = await supabase
-        .from('merchants')
-        .insert([{
-          ...merchantData,
-          id: authData.user.id,
-          fee_type: 'percentage',
-          fee_percentage: 2.99,
-          documents_submitted: false,
-          can_generate_api_key: false,
-          can_withdraw: false
-        }])
-        .select()
-        .single();
-
-      if (merchantError) {
-        logger.error('Erro ao criar registro do comerciante', {
-          error: merchantError,
-          userId: authData.user.id,
-          companyName: merchantData.company_name
+      if (!authData?.user) {
+        throw new BadRequestException({
+          code: 'AUTH_ERROR',
+          message: 'Erro ao criar usuário. Por favor, tente novamente.'
         });
+      }
 
-        // Tentar reverter a criação do usuário
-        await supabase.auth.admin.deleteUser(authData.user.id);
-        
-        if (merchantError.message.includes('duplicate key')) {
-          throw new BadRequestException('CNPJ já cadastrado. Por favor, verifique os dados.');
+      // Upload dos documentos com retentativas
+      let documentUrls;
+      for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+        try {
+          documentUrls = await this.uploadDocuments(authData.user.id, merchantData);
+          break;
+        } catch (error) {
+          if (attempt === this.MAX_RETRIES) {
+            logger.error('Todas as tentativas de upload falharam', {
+              error,
+              userId: authData.user.id,
+              attempts: attempt
+            });
+            // Limpar usuário criado em caso de falha
+            await supabase.auth.admin.deleteUser(authData.user.id);
+            throw new BadRequestException({
+              code: 'UPLOAD_ERROR',
+              message: 'Erro ao fazer upload dos documentos. Por favor, tente novamente.',
+              details: error.message
+            });
+          }
+          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
         }
-        
-        throw merchantError;
+      }
+
+      // Criar o comerciante com retentativas
+      let merchant;
+      for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+        try {
+          const { data, error } = await supabase
+            .from('merchants')
+            .insert([{
+              ...merchantData,
+              id: authData.user.id,
+              document_urls: documentUrls,
+              documents_submitted: true,
+              documents_status: 'pending',
+              fee_type: 'percentage',
+              fee_percentage: 2.99,
+              can_generate_api_key: false,
+              can_withdraw: false
+            }])
+            .select()
+            .single();
+
+          if (error) {
+            if (error.message.includes('duplicate key')) {
+              throw new BadRequestException({
+                code: 'CNPJ_IN_USE',
+                message: 'CNPJ já cadastrado. Por favor, verifique os dados.',
+                field: 'cnpj'
+              });
+            }
+            throw error;
+          }
+
+          merchant = data;
+          break;
+        } catch (error) {
+          if (attempt === this.MAX_RETRIES) {
+            logger.error('Todas as tentativas de criar comerciante falharam', {
+              error,
+              userId: authData.user.id,
+              attempts: attempt
+            });
+            // Limpar usuário criado em caso de falha
+            await supabase.auth.admin.deleteUser(authData.user.id);
+            throw new BadRequestException({
+              code: 'REGISTRATION_ERROR',
+              message: 'Erro ao criar registro do comerciante. Por favor, tente novamente.',
+              details: error.message
+            });
+          }
+          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+        }
       }
 
       logger.info('Comerciante registrado com sucesso', {
@@ -104,7 +183,8 @@ export class MerchantsService {
 
       return {
         ...merchant,
-        message: 'Cadastro realizado com sucesso. Envie os documentos para ativar todas as funcionalidades.'
+        session: authData.session,
+        message: 'Cadastro realizado com sucesso. Os documentos estão em análise.'
       };
     } catch (error) {
       logger.error('Erro no processo de registro', {
@@ -125,66 +205,15 @@ export class MerchantsService {
         throw error;
       }
 
-      throw new BadRequestException(
-        'Erro ao processar o registro. Por favor, verifique os dados e tente novamente.'
-      );
+      throw new BadRequestException({
+        code: 'UNKNOWN_ERROR',
+        message: 'Erro ao processar o registro. Por favor, tente novamente.',
+        details: error.message
+      });
     }
   }
 
-  async submitDocuments(merchantId: string, documentsData: SubmitMerchantDocumentsDto) {
-    try {
-      // Verificar se o comerciante existe
-      const { data: merchant, error: merchantError } = await supabase
-        .from('merchants')
-        .select('*')
-        .eq('id', merchantId)
-        .single();
-
-      if (merchantError || !merchant) {
-        throw new NotFoundException('Comerciante não encontrado');
-      }
-
-      // Upload dos documentos
-      logger.info('Iniciando upload dos documentos', { merchantId });
-      const documentUrls = await this.uploadDocuments(merchantId, documentsData);
-      logger.info('Upload dos documentos concluído', {
-        merchantId,
-        documentCount: Object.keys(documentUrls).length
-      });
-
-      // Atualizar o comerciante
-      const { data: updatedMerchant, error: updateError } = await supabase
-        .from('merchants')
-        .update({
-          document_urls: documentUrls,
-          documents_submitted: true,
-          documents_status: 'pending'
-        })
-        .eq('id', merchantId)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
-
-      logger.info('Documentos enviados com sucesso', {
-        merchantId,
-        documentsStatus: 'pending'
-      });
-
-      return {
-        ...updatedMerchant,
-        message: 'Documentos enviados com sucesso. Aguarde a análise.'
-      };
-    } catch (error) {
-      logger.error('Erro ao enviar documentos', {
-        error,
-        merchantId
-      });
-      throw error;
-    }
-  }
-
-  private async uploadDocuments(userId: string, data: SubmitMerchantDocumentsDto) {
+  private async uploadDocuments(userId: string, data: CreateMerchantDto) {
     const documents = {
       contract: data.contract_document,
       cnpj: data.cnpj_document,
@@ -222,7 +251,11 @@ export class MerchantsService {
             hasMatches: !!matches,
             matchLength: matches?.length
           });
-          throw new Error(`Formato inválido para documento ${type}`);
+          throw new BadRequestException({
+            code: 'INVALID_FILE_FORMAT',
+            message: `Formato inválido para documento ${type}`,
+            field: `${type}_document`
+          });
         }
 
         const mimeType = matches[1];
@@ -236,7 +269,11 @@ export class MerchantsService {
             documentType: type,
             mimeType
           });
-          throw new Error(`Tipo de arquivo não suportado: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`);
+          throw new BadRequestException({
+            code: 'INVALID_FILE_TYPE',
+            message: `Tipo de arquivo não suportado: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`,
+            field: `${type}_document`
+          });
         }
 
         const buffer = Buffer.from(base64File, 'base64');
@@ -250,7 +287,11 @@ export class MerchantsService {
             size: buffer.length,
             maxSize
           });
-          throw new Error(`O arquivo ${type} excede o tamanho máximo permitido de 5MB`);
+          throw new BadRequestException({
+            code: 'FILE_TOO_LARGE',
+            message: `O arquivo ${type} excede o tamanho máximo permitido de 5MB`,
+            field: `${type}_document`
+          });
         }
 
         // Determinar a extensão do arquivo
@@ -266,51 +307,61 @@ export class MerchantsService {
             extension = 'png';
             break;
           default:
-            throw new Error(`Tipo de arquivo não suportado: ${mimeType}`);
+            throw new BadRequestException({
+              code: 'INVALID_FILE_TYPE',
+              message: `Tipo de arquivo não suportado: ${mimeType}`,
+              field: `${type}_document`
+            });
         }
 
         const filename = `${userId}/${type}.${extension}`;
 
-        logger.info(`Iniciando upload para Storage`, {
-          userId,
-          documentType: type,
-          filename,
-          size: buffer.length
-        });
+        // Upload do arquivo com retentativas
+        let uploadSuccess = false;
+        for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+          try {
+            const { data: uploadData, error: uploadError } = await supabase.storage
+              .from('merchant-documents')
+              .upload(filename, buffer, {
+                contentType: mimeType,
+                upsert: true
+              });
 
-        // Upload do arquivo para o Supabase Storage
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('merchant-documents')
-          .upload(filename, buffer, {
-            contentType: mimeType,
-            upsert: true
-          });
+            if (uploadError) throw uploadError;
 
-        if (uploadError) {
-          logger.error(`Erro no upload para Storage`, {
-            userId,
-            documentType: type,
-            error: uploadError
-          });
-          throw uploadError;
+            // Gerar URL pública do documento
+            const { data: urlData } = supabase.storage
+              .from('merchant-documents')
+              .getPublicUrl(filename);
+
+            documentUrls[type] = {
+              url: urlData.publicUrl,
+              status: 'pending',
+              uploaded_at: new Date().toISOString()
+            };
+
+            uploadSuccess = true;
+            break;
+          } catch (error) {
+            if (attempt === this.MAX_RETRIES) {
+              throw new BadRequestException({
+                code: 'UPLOAD_ERROR',
+                message: `Erro ao fazer upload do documento ${type}. Por favor, tente novamente.`,
+                field: `${type}_document`,
+                details: error.message
+              });
+            }
+            await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+          }
         }
 
-        // Gerar URL pública do documento
-        const { data: urlData } = supabase.storage
-          .from('merchant-documents')
-          .getPublicUrl(filename);
-
-        documentUrls[type] = {
-          url: urlData.publicUrl,
-          status: 'pending',
-          uploaded_at: new Date().toISOString()
-        };
-
-        logger.info(`Upload do documento ${type} concluído com sucesso`, {
-          userId,
-          documentType: type,
-          url: urlData.publicUrl
-        });
+        if (!uploadSuccess) {
+          throw new BadRequestException({
+            code: 'UPLOAD_ERROR',
+            message: `Erro ao fazer upload do documento ${type}. Por favor, tente novamente.`,
+            field: `${type}_document`
+          });
+        }
 
       } catch (error) {
         logger.error(`Error uploading ${type} document`, {
@@ -318,7 +369,7 @@ export class MerchantsService {
           userId,
           type
         });
-        throw new BadRequestException(`Erro ao fazer upload do documento ${type}: ${error.message}`);
+        throw error;
       }
     }
 

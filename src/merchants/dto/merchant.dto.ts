@@ -70,9 +70,7 @@ export class CreateMerchantDto {
   @IsString()
   @IsOptional()
   postal_code?: string;
-}
 
-export class SubmitMerchantDocumentsDto {
   @ApiProperty({
     description: 'Contrato Social em base64',
     example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'

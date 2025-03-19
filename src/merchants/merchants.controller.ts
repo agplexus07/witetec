@@ -11,7 +11,6 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
 import { 
   CreateMerchantDto,
-  SubmitMerchantDocumentsDto,
   MerchantStatisticsDto
 } from './dto/merchant.dto';
 import { ThrottlerGuard } from '@nestjs/throttler';
@@ -26,15 +25,6 @@ export class MerchantsController {
   @ApiOperation({ summary: 'Registrar novo comerciante' })
   async register(@Body() merchantData: CreateMerchantDto) {
     return this.merchantsService.register(merchantData);
-  }
-
-  @Post(':id/documents')
-  @ApiOperation({ summary: 'Enviar documentos do comerciante' })
-  async submitDocuments(
-    @Param('id') id: string,
-    @Body() documentsData: SubmitMerchantDocumentsDto
-  ) {
-    return this.merchantsService.submitDocuments(id, documentsData);
   }
 
   @Get(':id')
