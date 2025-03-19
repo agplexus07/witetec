@@ -5,7 +5,8 @@ import {
   Get, 
   Param, 
   Put, 
-  UseGuards
+  UseGuards,
+  Req
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
@@ -14,6 +15,7 @@ import {
   MerchantStatisticsDto
 } from './dto/merchant.dto';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { Request } from 'express';
 
 @ApiTags('merchants')
 @Controller('merchants')
@@ -23,8 +25,8 @@ export class MerchantsController {
 
   @Post('register')
   @ApiOperation({ summary: 'Registrar novo comerciante' })
-  async register(@Body() merchantData: CreateMerchantDto) {
-    return this.merchantsService.register(merchantData);
+  async register(@Body() merchantData: CreateMerchantDto, @Req() req: Request) {
+    return this.merchantsService.register(merchantData, req);
   }
 
   @Get(':id')

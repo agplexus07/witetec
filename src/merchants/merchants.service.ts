@@ -2,13 +2,14 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
 import { CreateMerchantDto } from './dto/merchant.dto';
+import { Request } from 'express';
 
 @Injectable()
 export class MerchantsService {
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAY = 2000; // 2 segundos
 
-  async register(merchantData: CreateMerchantDto) {
+  async register(merchantData: CreateMerchantDto, req: Request) {
     try {
       logger.info('Iniciando registro de comerciante', {
         email: merchantData.email,
@@ -33,18 +34,8 @@ export class MerchantsService {
         });
       }
 
-      // Obter token do localStorage
-      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-      
-      if (!token) {
-        throw new BadRequestException({
-          code: 'AUTH_ERROR',
-          message: 'Token de autenticação não encontrado'
-        });
-      }
-
-      // Configurar token no cliente Supabase
-      const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+      // Obter usuário atual
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError || !user) {
         throw new BadRequestException({
