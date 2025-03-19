@@ -1,15 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsObject, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
-
-class DocumentData {
-  @ApiProperty({
-    description: 'Base64 do arquivo',
-    example: 'data:image/jpeg;base64,...'
-  })
-  @IsString()
-  base64: string;
-}
+import { IsString, IsEmail, IsOptional, IsObject } from 'class-validator';
 
 export class CreateMerchantDto {
   @ApiProperty({
@@ -84,21 +74,17 @@ export class CreateMerchantDto {
   @ApiProperty({
     description: 'Documentos do comerciante',
     example: {
-      cnpj: {
-        base64: 'data:image/jpeg;base64,...'
-      },
-      identity: {
-        base64: 'data:image/jpeg;base64,...'
-      },
-      selfie: {
-        base64: 'data:image/jpeg;base64,...'
-      }
+      cnpj: 'data:image/jpeg;base64,...',
+      identity: 'data:image/jpeg;base64,...',
+      selfie: 'data:image/jpeg;base64,...'
     }
   })
   @IsObject()
-  @ValidateNested()
-  @Type(() => DocumentData)
-  documents: Record<string, DocumentData>;
+  documents: {
+    cnpj: string;
+    identity: string;
+    selfie: string;
+  };
 }
 
 export class MerchantStatisticsDto {
