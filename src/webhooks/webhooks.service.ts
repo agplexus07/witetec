@@ -33,10 +33,24 @@ export class WebhooksService {
         throw new BadRequestException('Transação não encontrada');
       }
 
-      // Atualizar status da transação
-      await this.transactionsService.updateTransactionStatus(transaction.id, {
-        status: 'completed'
-      });
+      // Atualizar a transação com os dados do pagamento
+      const { error: updateError } = await supabase
+        .from('transactions')
+        .update({
+          status: 'completed',
+          paid_at: data.horario,
+          end_to_end_id: data.endToEndId,
+          payer_info: data.pagador || {},
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', transaction.id);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      // Atualizar o saldo do comerciante
+      await this.updateMerchantBalance(transaction.merchant_id, transaction.net_amount);
 
       logger.info('Webhook ONZ processado com sucesso', {
         txid: data.txid,
@@ -51,5 +65,14 @@ export class WebhooksService {
       });
       throw error;
     }
+  }
+
+  private async updateMerchantBalance(merchantId: string, amount: number) {
+    const { error } = await supabase.rpc('update_merchant_balance', {
+      p_merchant_id: merchantId,
+      p_amount: amount,
+    });
+
+    if (error) throw error;
   }
 }
