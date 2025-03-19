@@ -26,11 +26,11 @@ export class MerchantsService {
 
       const missingFields = requiredFields.filter(field => !merchantData[field]);
       if (missingFields.length > 0) {
-        logger.error('Campos obrigatórios faltando', { missingFields });
         throw new BadRequestException({
           code: 'MISSING_FIELDS',
           message: `Campos obrigatórios faltando: ${missingFields.join(', ')}`,
-          fields: missingFields
+          fields: missingFields,
+          statusCode: 400
         });
       }
 
@@ -41,7 +41,20 @@ export class MerchantsService {
         throw new BadRequestException({
           code: 'AUTH_ERROR',
           message: 'Usuário não autenticado',
+          statusCode: 401,
           details: userError?.message
+        });
+      }
+
+      // Obter sessão atual
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError || !session) {
+        throw new BadRequestException({
+          code: 'AUTH_ERROR',
+          message: 'Sessão inválida',
+          statusCode: 401,
+          details: sessionError?.message
         });
       }
 
@@ -53,7 +66,8 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'INVALID_FILE_FORMAT',
               message: `Dados inválidos para o documento ${docType}`,
-              field: docType
+              field: docType,
+              statusCode: 400
             });
           }
 
@@ -62,7 +76,8 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'INVALID_FILE_FORMAT',
               message: `Formato inválido para documento ${docType}. Deve iniciar com data:`,
-              field: docType
+              field: docType,
+              statusCode: 400
             });
           }
 
@@ -73,7 +88,8 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'INVALID_FILE_FORMAT',
               message: `Formato inválido para documento ${docType}`,
-              field: docType
+              field: docType,
+              statusCode: 400
             });
           }
 
@@ -86,7 +102,8 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'INVALID_FILE_TYPE',
               message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`,
-              field: docType
+              field: docType,
+              statusCode: 400
             });
           }
 
@@ -98,7 +115,8 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'FILE_TOO_LARGE',
               message: `O arquivo ${docType} excede o tamanho máximo permitido de 5MB`,
-              field: docType
+              field: docType,
+              statusCode: 400
             });
           }
 
@@ -118,7 +136,8 @@ export class MerchantsService {
               throw new BadRequestException({
                 code: 'INVALID_FILE_TYPE',
                 message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}`,
-                field: docType
+                field: docType,
+                statusCode: 400
               });
           }
 
@@ -156,6 +175,7 @@ export class MerchantsService {
                   code: 'UPLOAD_ERROR',
                   message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
                   field: docType,
+                  statusCode: 400,
                   details: error.message
                 });
               }
@@ -167,7 +187,8 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'UPLOAD_ERROR',
               message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
-              field: docType
+              field: docType,
+              statusCode: 400
             });
           }
 
@@ -211,11 +232,22 @@ export class MerchantsService {
 
           if (error) {
             if (error.message.includes('duplicate key')) {
-              throw new BadRequestException({
-                code: 'CNPJ_IN_USE',
-                message: 'CNPJ já cadastrado. Por favor, verifique os dados.',
-                field: 'cnpj'
-              });
+              if (error.message.includes('email')) {
+                throw new BadRequestException({
+                  code: 'EMAIL_IN_USE',
+                  message: 'Email já cadastrado. Por favor, utilize outro email.',
+                  field: 'email',
+                  statusCode: 400
+                });
+              }
+              if (error.message.includes('cnpj')) {
+                throw new BadRequestException({
+                  code: 'CNPJ_IN_USE',
+                  message: 'CNPJ já cadastrado. Por favor, verifique os dados.',
+                  field: 'cnpj',
+                  statusCode: 400
+                });
+              }
             }
             throw error;
           }
@@ -232,6 +264,7 @@ export class MerchantsService {
             throw new BadRequestException({
               code: 'REGISTRATION_ERROR',
               message: 'Erro ao criar registro do comerciante. Por favor, tente novamente.',
+              statusCode: 400,
               details: error.message
             });
           }
@@ -244,10 +277,19 @@ export class MerchantsService {
         companyName: merchant.company_name
       });
 
+      // Retornar resposta no formato esperado
       return {
-        ...merchant,
+        id: merchant.id,
+        company_name: merchant.company_name,
+        status: merchant.status,
+        session: {
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+          expires_in: session.expires_in
+        },
         message: 'Cadastro realizado com sucesso. Os documentos estão em análise.'
       };
+
     } catch (error) {
       logger.error('Erro no processo de registro', {
         error: {
@@ -270,6 +312,7 @@ export class MerchantsService {
       throw new BadRequestException({
         code: 'UNKNOWN_ERROR',
         message: 'Erro ao processar o registro. Por favor, tente novamente.',
+        statusCode: 500,
         details: error.message
       });
     }
