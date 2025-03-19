@@ -33,49 +33,13 @@ export class MerchantsService {
         });
       }
 
-      // Criar novo usuário com email/senha com retentativas
-      let authData;
-      for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
-        try {
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email: merchantData.email,
-            password: merchantData.cnpj
-          });
-
-          if (error) {
-            if (error.message.includes('User already registered')) {
-              throw new BadRequestException({
-                code: 'EMAIL_IN_USE',
-                message: 'Email já cadastrado. Por favor, use outro email.',
-                field: 'email'
-              });
-            }
-            throw error;
-          }
-
-          authData = data;
-          break;
-        } catch (error) {
-          if (attempt === this.MAX_RETRIES) {
-            logger.error('Todas as tentativas de criar usuário falharam', {
-              error,
-              email: merchantData.email,
-              attempts: attempt
-            });
-            throw new BadRequestException({
-              code: 'AUTH_ERROR',
-              message: 'Erro ao criar usuário. Por favor, tente novamente.',
-              details: error.message
-            });
-          }
-          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
-        }
-      }
-
-      if (!authData?.user) {
+      // Obter o usuário atual
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError || !user) {
         throw new BadRequestException({
           code: 'AUTH_ERROR',
-          message: 'Erro ao criar usuário. Por favor, tente novamente.'
+          message: 'Usuário não autenticado'
         });
       }
 
@@ -83,17 +47,15 @@ export class MerchantsService {
       let documentUrls;
       for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
         try {
-          documentUrls = await this.uploadDocuments(authData.user.id, merchantData);
+          documentUrls = await this.uploadDocuments(user.id, merchantData);
           break;
         } catch (error) {
           if (attempt === this.MAX_RETRIES) {
             logger.error('Todas as tentativas de upload falharam', {
               error,
-              userId: authData.user.id,
+              userId: user.id,
               attempts: attempt
             });
-            // Limpar usuário criado em caso de falha
-            await supabase.auth.admin.deleteUser(authData.user.id);
             throw new BadRequestException({
               code: 'UPLOAD_ERROR',
               message: 'Erro ao fazer upload dos documentos. Por favor, tente novamente.',
@@ -111,7 +73,7 @@ export class MerchantsService {
           const { data, error } = await supabase
             .from('merchants')
             .insert([{
-              id: authData.user.id,
+              id: user.id,
               company_name: merchantData.company_name,
               trading_name: merchantData.trading_name,
               cnpj: merchantData.cnpj,
@@ -149,11 +111,9 @@ export class MerchantsService {
           if (attempt === this.MAX_RETRIES) {
             logger.error('Todas as tentativas de criar comerciante falharam', {
               error,
-              userId: authData.user.id,
+              userId: user.id,
               attempts: attempt
             });
-            // Limpar usuário criado em caso de falha
-            await supabase.auth.admin.deleteUser(authData.user.id);
             throw new BadRequestException({
               code: 'REGISTRATION_ERROR',
               message: 'Erro ao criar registro do comerciante. Por favor, tente novamente.',
@@ -171,7 +131,6 @@ export class MerchantsService {
 
       return {
         ...merchant,
-        session: authData.session,
         message: 'Cadastro realizado com sucesso. Os documentos estão em análise.'
       };
     } catch (error) {
