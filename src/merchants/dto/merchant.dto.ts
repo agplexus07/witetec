@@ -70,7 +70,9 @@ export class CreateMerchantDto {
   @IsString()
   @IsOptional()
   postal_code?: string;
+}
 
+export class SubmitMerchantDocumentsDto {
   @ApiProperty({
     description: 'Contrato Social em base64',
     example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
@@ -165,35 +167,4 @@ export class MerchantStatisticsDto {
     example: 0.5
   })
   chargebackRate: number;
-}
-
-export class UpdateMerchantFeeDto {
-  @ApiProperty({
-    description: 'Percentual da taxa',
-    example: 2.99,
-    minimum: 0,
-    maximum: 100,
-  })
-  @IsNumber()
-  @Min(0)
-  @Max(100)
-  feePercentage: number;
-}
-
-export class UpdateMerchantStatusDto {
-  @ApiProperty({
-    description: 'Status do comerciante',
-    example: 'approved',
-    enum: ['approved', 'rejected'],
-  })
-  @IsEnum(['approved', 'rejected'])
-  status: 'approved' | 'rejected';
-
-  @ApiPropertyOptional({
-    description: 'Motivo da rejeição',
-    example: 'Documentação incompleta',
-  })
-  @IsString()
-  @IsOptional()
-  rejection_reason?: string;
 }

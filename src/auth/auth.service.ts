@@ -20,7 +20,7 @@ export class AuthService {
       // Verificar se existe registro do comerciante
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('status, rejection_reason')
+        .select('status, rejection_reason, documents_submitted, documents_status, can_generate_api_key, can_withdraw')
         .eq('id', authData.user.id)
         .maybeSingle();
 
@@ -50,7 +50,13 @@ export class AuthService {
           return {
             ...authData,
             merchant_status: 'pending',
-            message: 'Cadastro em análise. Aguardando aprovação.'
+            documents_submitted: merchant.documents_submitted,
+            documents_status: merchant.documents_status,
+            can_generate_api_key: merchant.can_generate_api_key,
+            can_withdraw: merchant.can_withdraw,
+            message: merchant.documents_submitted ? 
+              'Documentos em análise. Aguardando aprovação.' : 
+              'Cadastro realizado. Envie os documentos para ativar todas as funcionalidades.'
           };
 
         case 'rejected':
@@ -73,6 +79,10 @@ export class AuthService {
           return {
             ...authData,
             merchant_status: 'approved',
+            documents_submitted: merchant.documents_submitted,
+            documents_status: merchant.documents_status,
+            can_generate_api_key: merchant.can_generate_api_key,
+            can_withdraw: merchant.can_withdraw,
             message: 'Login realizado com sucesso.'
           };
 

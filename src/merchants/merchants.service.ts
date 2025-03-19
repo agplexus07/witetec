@@ -1,83 +1,190 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
-import { MerchantStatisticsDto } from './dto/merchant.dto';
+import { 
+  CreateMerchantDto, 
+  SubmitMerchantDocumentsDto,
+  MerchantStatisticsDto 
+} from './dto/merchant.dto';
 
 @Injectable()
 export class MerchantsService {
-  async register(merchantData: any) {
+  async register(merchantData: CreateMerchantDto) {
     try {
+      logger.info('Iniciando registro de comerciante', {
+        email: merchantData.email,
+        cnpj: merchantData.cnpj
+      });
+
+      // Validar dados obrigatórios
+      const requiredFields = [
+        'company_name',
+        'cnpj',
+        'email'
+      ];
+
+      const missingFields = requiredFields.filter(field => !merchantData[field]);
+      if (missingFields.length > 0) {
+        logger.error('Campos obrigatórios faltando', { missingFields });
+        throw new BadRequestException(`Campos obrigatórios faltando: ${missingFields.join(', ')}`);
+      }
+
       // Criar novo usuário com email/senha
+      logger.info('Criando usuário no Supabase Auth', { email: merchantData.email });
+      
       const { data: authData, error: signUpError } = await supabase.auth.signUp({
         email: merchantData.email,
         password: merchantData.cnpj // Usando CNPJ como senha inicial
       });
 
       if (signUpError) {
-        logger.error('Error creating user', {
+        logger.error('Erro ao criar usuário no Supabase Auth', {
           error: signUpError,
           email: merchantData.email
         });
+        
+        if (signUpError.message.includes('User already registered')) {
+          throw new BadRequestException('Email já cadastrado. Por favor, use outro email.');
+        }
+        
         throw new BadRequestException('Erro ao criar usuário: ' + signUpError.message);
       }
 
       if (!authData.user) {
+        logger.error('Usuário não criado no Supabase Auth', { email: merchantData.email });
         throw new BadRequestException('Erro ao criar usuário');
       }
 
-      // Upload dos documentos
-      const documentUrls = await this.uploadDocuments(authData.user.id, merchantData);
-
-      // Remover documentos dos dados do comerciante antes de salvar
-      const { 
-        contract_document, 
-        cnpj_document, 
-        identity_document, 
-        identity_selfie, 
-        bank_document,
-        ...merchantInfo 
-      } = merchantData;
+      logger.info('Usuário criado com sucesso', {
+        userId: authData.user.id,
+        email: merchantData.email
+      });
 
       // Criar o comerciante
+      logger.info('Criando registro do comerciante', {
+        userId: authData.user.id,
+        companyName: merchantData.company_name
+      });
+
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
         .insert([{
-          ...merchantInfo,
+          ...merchantData,
           id: authData.user.id,
           fee_type: 'percentage',
           fee_percentage: 2.99,
-          document_urls: documentUrls
+          documents_submitted: false,
+          can_generate_api_key: false,
+          can_withdraw: false
         }])
         .select()
         .single();
 
       if (merchantError) {
-        logger.error('Error creating merchant', {
+        logger.error('Erro ao criar registro do comerciante', {
           error: merchantError,
-          userId: authData.user.id
+          userId: authData.user.id,
+          companyName: merchantData.company_name
         });
+
+        // Tentar reverter a criação do usuário
+        await supabase.auth.admin.deleteUser(authData.user.id);
+        
+        if (merchantError.message.includes('duplicate key')) {
+          throw new BadRequestException('CNPJ já cadastrado. Por favor, verifique os dados.');
+        }
+        
         throw merchantError;
       }
 
-      logger.info('New merchant registered', {
+      logger.info('Comerciante registrado com sucesso', {
         merchantId: merchant.id,
         companyName: merchant.company_name
       });
 
       return {
         ...merchant,
-        message: 'Cadastro realizado com sucesso. Aguarde a aprovação.'
+        message: 'Cadastro realizado com sucesso. Envie os documentos para ativar todas as funcionalidades.'
       };
     } catch (error) {
-      logger.error('Error registering merchant', {
+      logger.error('Erro no processo de registro', {
+        error: {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          stack: error.stack
+        },
+        merchantData: {
+          email: merchantData.email,
+          cnpj: merchantData.cnpj,
+          companyName: merchantData.company_name
+        }
+      });
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new BadRequestException(
+        'Erro ao processar o registro. Por favor, verifique os dados e tente novamente.'
+      );
+    }
+  }
+
+  async submitDocuments(merchantId: string, documentsData: SubmitMerchantDocumentsDto) {
+    try {
+      // Verificar se o comerciante existe
+      const { data: merchant, error: merchantError } = await supabase
+        .from('merchants')
+        .select('*')
+        .eq('id', merchantId)
+        .single();
+
+      if (merchantError || !merchant) {
+        throw new NotFoundException('Comerciante não encontrado');
+      }
+
+      // Upload dos documentos
+      logger.info('Iniciando upload dos documentos', { merchantId });
+      const documentUrls = await this.uploadDocuments(merchantId, documentsData);
+      logger.info('Upload dos documentos concluído', {
+        merchantId,
+        documentCount: Object.keys(documentUrls).length
+      });
+
+      // Atualizar o comerciante
+      const { data: updatedMerchant, error: updateError } = await supabase
+        .from('merchants')
+        .update({
+          document_urls: documentUrls,
+          documents_submitted: true,
+          documents_status: 'pending'
+        })
+        .eq('id', merchantId)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      logger.info('Documentos enviados com sucesso', {
+        merchantId,
+        documentsStatus: 'pending'
+      });
+
+      return {
+        ...updatedMerchant,
+        message: 'Documentos enviados com sucesso. Aguarde a análise.'
+      };
+    } catch (error) {
+      logger.error('Erro ao enviar documentos', {
         error,
-        merchantData
+        merchantId
       });
       throw error;
     }
   }
 
-  private async uploadDocuments(userId: string, data: any) {
+  private async uploadDocuments(userId: string, data: SubmitMerchantDocumentsDto) {
     const documents = {
       contract: data.contract_document,
       cnpj: data.cnpj_document,
@@ -86,10 +193,16 @@ export class MerchantsService {
       bank: data.bank_document
     };
 
-    const documentUrls: Record<string, string> = {};
+    const documentUrls: Record<string, any> = {};
 
     for (const [type, base64Data] of Object.entries(documents)) {
       try {
+        logger.info(`Iniciando upload do documento ${type}`, {
+          userId,
+          documentType: type,
+          hasData: !!base64Data
+        });
+
         // Adicionar prefixo data: se não existir
         let processedData = base64Data as string;
         if (!processedData.startsWith('data:')) {
@@ -103,13 +216,43 @@ export class MerchantsService {
         const matches = processedData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
         
         if (!matches || matches.length !== 3) {
+          logger.error(`Formato inválido para documento ${type}`, {
+            userId,
+            documentType: type,
+            hasMatches: !!matches,
+            matchLength: matches?.length
+          });
           throw new Error(`Formato inválido para documento ${type}`);
         }
 
         const mimeType = matches[1];
         const base64File = matches[2];
+        
+        // Validar tipo MIME
+        const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
+        if (!allowedMimes.includes(mimeType)) {
+          logger.error(`Tipo de arquivo não permitido para ${type}`, {
+            userId,
+            documentType: type,
+            mimeType
+          });
+          throw new Error(`Tipo de arquivo não suportado: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`);
+        }
+
         const buffer = Buffer.from(base64File, 'base64');
         
+        // Validar tamanho (5MB)
+        const maxSize = 5 * 1024 * 1024; // 5MB em bytes
+        if (buffer.length > maxSize) {
+          logger.error(`Arquivo muito grande para ${type}`, {
+            userId,
+            documentType: type,
+            size: buffer.length,
+            maxSize
+          });
+          throw new Error(`O arquivo ${type} excede o tamanho máximo permitido de 5MB`);
+        }
+
         // Determinar a extensão do arquivo
         let extension;
         switch (mimeType) {
@@ -128,6 +271,13 @@ export class MerchantsService {
 
         const filename = `${userId}/${type}.${extension}`;
 
+        logger.info(`Iniciando upload para Storage`, {
+          userId,
+          documentType: type,
+          filename,
+          size: buffer.length
+        });
+
         // Upload do arquivo para o Supabase Storage
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('merchant-documents')
@@ -137,6 +287,11 @@ export class MerchantsService {
           });
 
         if (uploadError) {
+          logger.error(`Erro no upload para Storage`, {
+            userId,
+            documentType: type,
+            error: uploadError
+          });
           throw uploadError;
         }
 
@@ -145,7 +300,17 @@ export class MerchantsService {
           .from('merchant-documents')
           .getPublicUrl(filename);
 
-        documentUrls[type] = urlData.publicUrl;
+        documentUrls[type] = {
+          url: urlData.publicUrl,
+          status: 'pending',
+          uploaded_at: new Date().toISOString()
+        };
+
+        logger.info(`Upload do documento ${type} concluído com sucesso`, {
+          userId,
+          documentType: type,
+          url: urlData.publicUrl
+        });
 
       } catch (error) {
         logger.error(`Error uploading ${type} document`, {
@@ -200,7 +365,7 @@ export class MerchantsService {
       // Buscar saldo do merchant
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('balance')
+        .select('balance, can_withdraw')
         .eq('id', merchantId)
         .single();
 
@@ -210,8 +375,8 @@ export class MerchantsService {
         pixToday: 0,
         pix30Days: 0,
         totalTransactions: transactions?.length || 0,
-        availableBalance: merchant?.balance || 0,
-        pendingBalance: 0,
+        availableBalance: merchant?.can_withdraw ? (merchant?.balance || 0) : 0,
+        pendingBalance: !merchant?.can_withdraw ? (merchant?.balance || 0) : 0,
         successRate: 0,
         averageTicket: 0,
         chargebackRate: 0
@@ -219,7 +384,6 @@ export class MerchantsService {
 
       if (transactions?.length) {
         const successful = transactions.filter(tx => tx.status === 'completed');
-        const pending = transactions.filter(tx => tx.status === 'pending');
         const chargebacks = transactions.filter(tx => tx.status === 'chargeback');
         
         // Calcular taxas
@@ -239,8 +403,6 @@ export class MerchantsService {
               stats.pixToday += tx.amount;
             }
             stats.pix30Days += tx.amount;
-          } else if (tx.status === 'pending') {
-            stats.pendingBalance += tx.amount;
           }
         });
       }
@@ -255,64 +417,6 @@ export class MerchantsService {
       logger.error('Error calculating merchant statistics', {
         error,
         merchantId
-      });
-      throw error;
-    }
-  }
-
-  async updateMerchantStatus(id: string, status: 'approved' | 'rejected', rejectionReason?: string) {
-    try {
-      const { data, error } = await supabase
-        .from('merchants')
-        .update({ 
-          status,
-          ...(rejectionReason && { rejection_reason: rejectionReason })
-        })
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      logger.info('Merchant status updated', {
-        merchantId: id,
-        status,
-        rejectionReason
-      });
-
-      return data;
-    } catch (error) {
-      logger.error('Error updating merchant status', {
-        error,
-        merchantId: id,
-        status
-      });
-      throw error;
-    }
-  }
-
-  async updateMerchantFee(id: string, feePercentage: number) {
-    try {
-      const { data, error } = await supabase
-        .from('merchants')
-        .update({ fee_percentage: feePercentage })
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      logger.info('Merchant fee updated', {
-        merchantId: id,
-        feePercentage
-      });
-
-      return data;
-    } catch (error) {
-      logger.error('Error updating merchant fee', {
-        error,
-        merchantId: id,
-        feePercentage
       });
       throw error;
     }
@@ -336,7 +440,7 @@ export class MerchantsService {
 
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('balance')
+        .select('balance, can_withdraw, documents_status, documents_submitted')
         .eq('id', merchantId)
         .single();
 
@@ -349,7 +453,10 @@ export class MerchantsService {
         successRate: 0,
         averageTicket: 0,
         chargebackRate: 0,
-        availableBalance: merchant?.balance || 0
+        availableBalance: merchant?.can_withdraw ? (merchant?.balance || 0) : 0,
+        documentsStatus: merchant?.documents_status || 'pending',
+        documentsSubmitted: merchant?.documents_submitted || false,
+        canWithdraw: merchant?.can_withdraw || false
       };
 
       if (transactions?.length) {

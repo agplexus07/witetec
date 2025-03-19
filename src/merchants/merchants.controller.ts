@@ -10,9 +10,8 @@ import {
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { MerchantsService } from './merchants.service';
 import { 
-  CreateMerchantDto, 
-  UpdateMerchantFeeDto, 
-  UpdateMerchantStatusDto,
+  CreateMerchantDto,
+  SubmitMerchantDocumentsDto,
   MerchantStatisticsDto
 } from './dto/merchant.dto';
 import { ThrottlerGuard } from '@nestjs/throttler';
@@ -24,9 +23,18 @@ export class MerchantsController {
   constructor(private readonly merchantsService: MerchantsService) {}
 
   @Post('register')
-  @ApiOperation({ summary: 'Registrar novo comerciante com documentos' })
+  @ApiOperation({ summary: 'Registrar novo comerciante' })
   async register(@Body() merchantData: CreateMerchantDto) {
     return this.merchantsService.register(merchantData);
+  }
+
+  @Post(':id/documents')
+  @ApiOperation({ summary: 'Enviar documentos do comerciante' })
+  async submitDocuments(
+    @Param('id') id: string,
+    @Body() documentsData: SubmitMerchantDocumentsDto
+  ) {
+    return this.merchantsService.submitDocuments(id, documentsData);
   }
 
   @Get(':id')
@@ -50,23 +58,5 @@ export class MerchantsController {
   @ApiOperation({ summary: 'Obter dados do dashboard' })
   async getDashboard(@Param('id') id: string) {
     return this.merchantsService.getDashboardStats(id);
-  }
-
-  @Put(':id/status')
-  @ApiOperation({ summary: 'Atualizar status do comerciante' })
-  async updateStatus(
-    @Param('id') id: string,
-    @Body() data: UpdateMerchantStatusDto,
-  ) {
-    return this.merchantsService.updateMerchantStatus(id, data.status, data.rejection_reason);
-  }
-
-  @Put(':id/fee')
-  @ApiOperation({ summary: 'Atualizar taxa do comerciante' })
-  async updateFee(
-    @Param('id') id: string,
-    @Body() data: UpdateMerchantFeeDto,
-  ) {
-    return this.merchantsService.updateMerchantFee(id, data.feePercentage);
   }
 }

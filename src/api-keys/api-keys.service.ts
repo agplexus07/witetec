@@ -21,7 +21,7 @@ export class ApiKeysService {
       // Verificar se o comerciante existe e está aprovado
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('status')
+        .select('status, can_generate_api_key, documents_status')
         .eq('id', data.merchant_id)
         .single();
 
@@ -30,12 +30,12 @@ export class ApiKeysService {
         throw new BadRequestException('Comerciante não encontrado');
       }
 
-      if (merchant.status !== 'approved') {
-        logger.error('Merchant not approved', { 
+      if (!merchant.can_generate_api_key) {
+        logger.error('Merchant cannot generate API keys', { 
           merchantId: data.merchant_id,
-          status: merchant.status 
+          documentsStatus: merchant.documents_status
         });
-        throw new BadRequestException('Comerciante precisa estar aprovado para gerar chaves de API');
+        throw new BadRequestException('Envie os documentos e aguarde a aprovação para gerar chaves de API');
       }
 
       // Gerar chaves
@@ -68,7 +68,6 @@ export class ApiKeysService {
         keyName: data.key_name
       });
 
-      // Retornar as chaves apenas na criação
       return {
         ...apiKeyData,
         api_key: apiKey,

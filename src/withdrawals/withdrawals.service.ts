@@ -9,15 +9,19 @@ export class WithdrawalsService {
 
   async createWithdrawal(data: CreateWithdrawalDto, merchantId: string) {
     try {
-      // Verificar saldo disponível
+      // Verificar se o comerciante pode realizar saques
       const { data: merchant } = await supabase
         .from('merchants')
-        .select('balance')
+        .select('balance, can_withdraw, documents_status')
         .eq('id', merchantId)
         .single();
 
       if (!merchant) {
         throw new BadRequestException('Comerciante não encontrado');
+      }
+
+      if (!merchant.can_withdraw) {
+        throw new BadRequestException('Envie os documentos e aguarde a aprovação para realizar saques');
       }
 
       const totalAmount = data.amount + this.WITHDRAWAL_FEE;
