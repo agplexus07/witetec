@@ -18,13 +18,6 @@ class DocumentFile {
   type: string;
 }
 
-class DocumentGroup {
-  @ApiProperty({ type: DocumentFile })
-  @ValidateNested()
-  @Type(() => DocumentFile)
-  file: DocumentFile;
-}
-
 export class CreateMerchantDto {
   @ApiProperty({
     description: 'Razão social da empresa',
@@ -97,15 +90,16 @@ export class CreateMerchantDto {
 
   @ApiProperty({
     description: 'Documentos do comerciante',
-    type: Object
+    example: {
+      file: {
+        base64: 'data:image/jpeg;base64,...',
+        type: 'cnpj'
+      }
+    }
   })
   @IsObject()
-  @ValidateNested()
-  @Type(() => Object)
   documents: {
-    cnpj: DocumentGroup;
-    identity: DocumentGroup;
-    selfie: DocumentGroup;
+    file: DocumentFile;
   };
 }
 
