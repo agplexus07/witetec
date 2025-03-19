@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
-import { CreateWebhookDto, OnzWebhookDto } from './dto/webhook.dto';
+import { CreateWebhookDto, OnzWebhookDto, ChargebackWebhookDto } from './dto/webhook.dto';
 import { ApiKeysService } from '../api-keys/api-keys.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import axios from 'axios';
@@ -65,6 +65,56 @@ export class WebhooksService {
     }
   }
 
+  async handleChargebackWebhook(data: ChargebackWebhookDto, signature: string) {
+    try {
+      logger.info('Processing chargeback webhook', {
+        transactionId: data.transaction_id,
+        amount: data.amount
+      });
+
+      // Buscar transação original
+      const { data: transaction, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('transaction_id', data.transaction_id)
+        .single();
+
+      if (error || !transaction) {
+        logger.error('Original transaction not found for chargeback', {
+          transactionId: data.transaction_id,
+          error
+        });
+        throw new BadRequestException('Transação original não encontrada');
+      }
+
+      // Atualizar status da transação para chargeback
+      await this.transactionsService.updateTransactionStatus(transaction.id, {
+        status: 'chargeback'
+      });
+
+      // Notificar o comerciante
+      await this.sendWebhookEvent(transaction.merchant_id, 'payment.chargeback', {
+        transaction_id: transaction.id,
+        amount: data.amount,
+        chargeback_date: data.chargeback_date,
+        reason: data.reason
+      });
+
+      logger.info('Chargeback webhook processed successfully', {
+        transactionId: transaction.id,
+        amount: data.amount
+      });
+
+      return { success: true };
+    } catch (error) {
+      logger.error('Error processing chargeback webhook', {
+        error,
+        data
+      });
+      throw error;
+    }
+  }
+
   async getAllWebhooks() {
     const { data, error } = await supabase
       .from('webhooks')
@@ -110,7 +160,7 @@ export class WebhooksService {
             merchant_id: data.merchant_id,
             url: data.url,
             description: data.description,
-            events: data.events || ['payment.success', 'payment.failed'],
+            events: data.events || ['payment.success', 'payment.failed', 'payment.chargeback'],
             secret_token: secretToken,
           },
         ])

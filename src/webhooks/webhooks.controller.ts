@@ -1,6 +1,6 @@
 import { Controller, Post, Get, Body, Param, Headers, UseGuards } from '@nestjs/common';
 import { WebhooksService } from './webhooks.service';
-import { CreateWebhookDto, OnzWebhookDto } from './dto/webhook.dto';
+import { CreateWebhookDto, OnzWebhookDto, ChargebackWebhookDto } from './dto/webhook.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { logger } from '../config/logger.config';
@@ -42,6 +42,32 @@ export class WebhooksController {
       logger.error('Erro ao processar webhook ONZ', { 
         error,
         data 
+      });
+      throw error;
+    }
+  }
+
+  @Post('onz/chargeback')
+  @ApiOperation({ summary: 'Receber notificação de chargeback da ONZ' })
+  async handleChargebackWebhook(
+    @Body() data: ChargebackWebhookDto,
+    @Headers('x-webhook-signature') signature: string
+  ) {
+    try {
+      logger.info('Webhook de chargeback recebido', {
+        transactionId: data.transaction_id,
+        amount: data.amount
+      });
+
+      const result = await this.webhooksService.handleChargebackWebhook(data, signature);
+
+      logger.info('Webhook de chargeback processado com sucesso', { result });
+
+      return result;
+    } catch (error) {
+      logger.error('Erro ao processar webhook de chargeback', {
+        error,
+        data
       });
       throw error;
     }

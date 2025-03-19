@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
 import { 
   UpdateMerchantFeeDto, 
@@ -8,7 +8,9 @@ import {
   AdminMetricsDto,
   MerchantRevenueDto,
   UpdateDocumentStatusDto,
-  UpdateDocumentsStatusDto
+  UpdateDocumentsStatusDto,
+  DocumentInfo,
+  MerchantDocumentUrls
 } from './dto/admin.dto';
 import { UpdateWithdrawalStatusDto } from '../withdrawals/dto/withdrawal.dto';
 import { logger } from '../config/logger.config';
@@ -158,15 +160,35 @@ export class AdminService {
     };
   }
 
+  async getMerchantDocuments(merchantId: string) {
+    const { data: merchant, error: merchantError } = await supabase
+      .from('merchants')
+      .select('document_urls')
+      .eq('id', merchantId)
+      .single();
+
+    if (merchantError || !merchant) {
+      throw new NotFoundException('Comerciante não encontrado');
+    }
+
+    return merchant.document_urls as MerchantDocumentUrls;
+  }
+
   async updateMerchantFee(merchantId: string, data: UpdateMerchantFeeDto) {
     const updateData: any = {
       fee_type: data.fee_type
     };
 
     if (data.fee_type === 'fixed') {
+      if (!data.fee_amount && data.fee_amount !== 0) {
+        throw new BadRequestException('Fee amount is required for fixed fee type');
+      }
       updateData.fee_amount = data.fee_amount;
       updateData.fee_percentage = null;
     } else {
+      if (!data.fee_percentage && data.fee_percentage !== 0) {
+        throw new BadRequestException('Fee percentage is required for percentage fee type');
+      }
       updateData.fee_percentage = data.fee_percentage;
       updateData.fee_amount = null;
     }
@@ -183,77 +205,127 @@ export class AdminService {
   }
 
   async updateMerchantStatus(merchantId: string, data: UpdateMerchantStatusDto) {
-    const updateData: any = {
-      status: data.status,
-      fee_type: data.fee_type,
-      ...(data.rejection_reason && { rejection_reason: data.rejection_reason }),
-    };
-
-    if (data.fee_type === 'fixed') {
-      updateData.fee_amount = data.fee_amount;
-      updateData.fee_percentage = null;
-    } else {
-      updateData.fee_percentage = data.fee_percentage;
-      updateData.fee_amount = null;
-    }
-
-    const { data: merchant, error } = await supabase
-      .from('merchants')
-      .update(updateData)
-      .eq('id', merchantId)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return merchant;
-  }
-
-  async getMerchantDocuments(merchantId: string) {
-    const { data, error } = await supabase
-      .from('merchant_documents')
-      .select('*')
-      .eq('merchant_id', merchantId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    return data;
-  }
-
-  async updateDocumentStatus(merchantId: string, documentId: string, data: UpdateDocumentStatusDto) {
     try {
-      const { data: document, error: updateError } = await supabase
-        .from('merchant_documents')
-        .update({
-          status: data.status,
-          reviewed_at: new Date().toISOString(),
-          reviewed_by: (await supabase.auth.getUser()).data.user?.id,
-          rejection_reason: data.rejection_reason
-        })
-        .eq('id', documentId)
-        .eq('merchant_id', merchantId)
+      // Buscar o comerciante primeiro
+      const { data: merchant, error: fetchError } = await supabase
+        .from('merchants')
+        .select('document_urls, status')
+        .eq('id', merchantId)
+        .single();
+
+      if (fetchError || !merchant) {
+        throw new NotFoundException('Comerciante não encontrado');
+      }
+
+      const updateData: any = {
+        status: data.status,
+        ...(data.rejection_reason && { rejection_reason: data.rejection_reason }),
+      };
+
+      // Se estiver aprovando o comerciante, aprovar todos os documentos automaticamente
+      if (data.status === 'approved') {
+        const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
+        const currentUser = (await supabase.auth.getUser()).data.user?.id;
+        const now = new Date().toISOString();
+
+        // Atualizar status de todos os documentos
+        Object.keys(documentUrls).forEach(docId => {
+          documentUrls[docId] = {
+            ...documentUrls[docId],
+            status: 'approved',
+            reviewed_at: now,
+            reviewed_by: currentUser
+          };
+        });
+
+        updateData.document_urls = documentUrls;
+        updateData.documents_verified = true;
+        updateData.documents_verified_at = now;
+        updateData.documents_verified_by = currentUser;
+
+        // Atualizar configuração de taxa
+        if (data.fee_type) {
+          updateData.fee_type = data.fee_type;
+          if (data.fee_type === 'fixed') {
+            if (typeof data.fee_amount !== 'undefined') {
+              updateData.fee_amount = data.fee_amount;
+              updateData.fee_percentage = null;
+            }
+          } else {
+            if (typeof data.fee_percentage !== 'undefined') {
+              updateData.fee_percentage = data.fee_percentage;
+              updateData.fee_amount = null;
+            }
+          }
+        }
+      }
+
+      const { data: updatedMerchant, error: updateError } = await supabase
+        .from('merchants')
+        .update(updateData)
+        .eq('id', merchantId)
         .select()
         .single();
 
       if (updateError) throw updateError;
 
-      // Verificar se todos os documentos foram aprovados
-      const { data: documents } = await supabase
-        .from('merchant_documents')
-        .select('status')
-        .eq('merchant_id', merchantId);
+      logger.info('Merchant status updated', {
+        merchantId,
+        status: data.status,
+        documentsApproved: data.status === 'approved',
+        feeType: data.fee_type,
+        feeAmount: data.fee_amount,
+        feePercentage: data.fee_percentage
+      });
 
-      const allApproved = documents?.every(doc => doc.status === 'approved');
+      return updatedMerchant;
+    } catch (error) {
+      logger.error('Error updating merchant status', {
+        error,
+        merchantId,
+        status: data.status
+      });
+      throw error;
+    }
+  }
 
-      if (allApproved) {
-        await supabase
-          .from('merchants')
-          .update({
-            documents_verified: true,
-            documents_verified_at: new Date().toISOString(),
-            documents_verified_by: (await supabase.auth.getUser()).data.user?.id
-          })
-          .eq('id', merchantId);
+  async updateDocumentStatus(merchantId: string, documentId: string, data: UpdateDocumentStatusDto) {
+    try {
+      // Buscar o comerciante
+      const { data: merchant, error: merchantError } = await supabase
+        .from('merchants')
+        .select('document_urls, status')
+        .eq('id', merchantId)
+        .single();
+
+      if (merchantError || !merchant) {
+        throw new NotFoundException('Comerciante não encontrado');
       }
+
+      // Atualizar o status do documento no document_urls
+      const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
+      documentUrls[documentId] = {
+        ...documentUrls[documentId],
+        status: data.status,
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: (await supabase.auth.getUser()).data.user?.id,
+        rejection_reason: data.rejection_reason
+      };
+
+      // Atualizar o comerciante
+      const { data: updatedMerchant, error: updateError } = await supabase
+        .from('merchants')
+        .update({
+          document_urls: documentUrls,
+          documents_verified: Object.values(documentUrls).every(doc => doc.status === 'approved'),
+          documents_verified_at: new Date().toISOString(),
+          documents_verified_by: (await supabase.auth.getUser()).data.user?.id
+        })
+        .eq('id', merchantId)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
 
       logger.info('Document status updated', {
         merchantId,
@@ -261,7 +333,7 @@ export class AdminService {
         status: data.status
       });
 
-      return document;
+      return updatedMerchant;
     } catch (error) {
       logger.error('Error updating document status', {
         error,
@@ -274,38 +346,46 @@ export class AdminService {
 
   async updateDocumentsStatus(merchantId: string, data: UpdateDocumentsStatusDto) {
     try {
-      const { data: documents, error: updateError } = await supabase
-        .from('merchant_documents')
-        .update({
+      // Buscar o comerciante
+      const { data: merchant, error: merchantError } = await supabase
+        .from('merchants')
+        .select('document_urls, status')
+        .eq('id', merchantId)
+        .single();
+
+      if (merchantError || !merchant) {
+        throw new NotFoundException('Comerciante não encontrado');
+      }
+
+      // Atualizar o status dos documentos selecionados
+      const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
+      const currentUser = (await supabase.auth.getUser()).data.user?.id;
+      const now = new Date().toISOString();
+
+      data.document_ids.forEach(docId => {
+        documentUrls[docId] = {
+          ...documentUrls[docId],
           status: data.status,
-          reviewed_at: new Date().toISOString(),
-          reviewed_by: (await supabase.auth.getUser()).data.user?.id,
+          reviewed_at: now,
+          reviewed_by: currentUser,
           rejection_reason: data.rejection_reason
+        };
+      });
+
+      // Atualizar o comerciante
+      const { data: updatedMerchant, error: updateError } = await supabase
+        .from('merchants')
+        .update({
+          document_urls: documentUrls,
+          documents_verified: Object.values(documentUrls).every(doc => doc.status === 'approved'),
+          documents_verified_at: now,
+          documents_verified_by: currentUser
         })
-        .in('id', data.document_ids)
-        .eq('merchant_id', merchantId)
-        .select();
+        .eq('id', merchantId)
+        .select()
+        .single();
 
       if (updateError) throw updateError;
-
-      // Verificar se todos os documentos foram aprovados
-      const { data: allDocuments } = await supabase
-        .from('merchant_documents')
-        .select('status')
-        .eq('merchant_id', merchantId);
-
-      const allApproved = allDocuments?.every(doc => doc.status === 'approved');
-
-      if (allApproved) {
-        await supabase
-          .from('merchants')
-          .update({
-            documents_verified: true,
-            documents_verified_at: new Date().toISOString(),
-            documents_verified_by: (await supabase.auth.getUser()).data.user?.id
-          })
-          .eq('id', merchantId);
-      }
 
       logger.info('Multiple documents status updated', {
         merchantId,
@@ -313,7 +393,7 @@ export class AdminService {
         status: data.status
       });
 
-      return documents;
+      return updatedMerchant;
     } catch (error) {
       logger.error('Error updating multiple documents status', {
         error,

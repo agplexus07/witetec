@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsNumber, Min, Max, IsEnum } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsNumber, Min, Max, IsEnum, Matches } from 'class-validator';
 
 export class CreateMerchantDto {
   @ApiProperty({
@@ -70,6 +70,51 @@ export class CreateMerchantDto {
   @IsString()
   @IsOptional()
   postal_code?: string;
+
+  @ApiProperty({
+    description: 'Contrato Social em base64',
+    example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
+  })
+  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
+    message: 'O documento deve estar no formato base64 com o prefixo data:'
+  })
+  contract_document: string;
+
+  @ApiProperty({
+    description: 'Cartão CNPJ em base64',
+    example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
+  })
+  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
+    message: 'O documento deve estar no formato base64 com o prefixo data:'
+  })
+  cnpj_document: string;
+
+  @ApiProperty({
+    description: 'Documento de Identidade em base64',
+    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAA...'
+  })
+  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
+    message: 'O documento deve estar no formato base64 com o prefixo data:'
+  })
+  identity_document: string;
+
+  @ApiProperty({
+    description: 'Selfie com documento em base64',
+    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAA...'
+  })
+  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
+    message: 'O documento deve estar no formato base64 com o prefixo data:'
+  })
+  identity_selfie: string;
+
+  @ApiProperty({
+    description: 'Comprovante bancário em base64',
+    example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
+  })
+  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
+    message: 'O documento deve estar no formato base64 com o prefixo data:'
+  })
+  bank_document: string;
 }
 
 export class MerchantStatisticsDto {

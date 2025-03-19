@@ -25,8 +25,18 @@ export class MerchantsService {
         throw new BadRequestException('Erro ao criar usuário');
       }
 
-      // Remover documentos dos dados do comerciante
-      const { documents, ...merchantInfo } = merchantData;
+      // Upload dos documentos
+      const documentUrls = await this.uploadDocuments(authData.user.id, merchantData);
+
+      // Remover documentos dos dados do comerciante antes de salvar
+      const { 
+        contract_document, 
+        cnpj_document, 
+        identity_document, 
+        identity_selfie, 
+        bank_document,
+        ...merchantInfo 
+      } = merchantData;
 
       // Criar o comerciante
       const { data: merchant, error: merchantError } = await supabase
@@ -35,7 +45,8 @@ export class MerchantsService {
           ...merchantInfo,
           id: authData.user.id,
           fee_type: 'percentage',
-          fee_percentage: 2.99
+          fee_percentage: 2.99,
+          document_urls: documentUrls
         }])
         .select()
         .single();
@@ -64,6 +75,89 @@ export class MerchantsService {
       });
       throw error;
     }
+  }
+
+  private async uploadDocuments(userId: string, data: any) {
+    const documents = {
+      contract: data.contract_document,
+      cnpj: data.cnpj_document,
+      identity: data.identity_document,
+      selfie: data.identity_selfie,
+      bank: data.bank_document
+    };
+
+    const documentUrls: Record<string, string> = {};
+
+    for (const [type, base64Data] of Object.entries(documents)) {
+      try {
+        // Adicionar prefixo data: se não existir
+        let processedData = base64Data as string;
+        if (!processedData.startsWith('data:')) {
+          // Detectar tipo de arquivo baseado no conteúdo
+          const isPDF = processedData.includes('JVBERi');
+          const mimeType = isPDF ? 'application/pdf' : 'image/png';
+          processedData = `data:${mimeType};base64,${processedData}`;
+        }
+
+        // Extrair o tipo MIME e os dados do base64
+        const matches = processedData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        
+        if (!matches || matches.length !== 3) {
+          throw new Error(`Formato inválido para documento ${type}`);
+        }
+
+        const mimeType = matches[1];
+        const base64File = matches[2];
+        const buffer = Buffer.from(base64File, 'base64');
+        
+        // Determinar a extensão do arquivo
+        let extension;
+        switch (mimeType) {
+          case 'application/pdf':
+            extension = 'pdf';
+            break;
+          case 'image/jpeg':
+            extension = 'jpg';
+            break;
+          case 'image/png':
+            extension = 'png';
+            break;
+          default:
+            throw new Error(`Tipo de arquivo não suportado: ${mimeType}`);
+        }
+
+        const filename = `${userId}/${type}.${extension}`;
+
+        // Upload do arquivo para o Supabase Storage
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('merchant-documents')
+          .upload(filename, buffer, {
+            contentType: mimeType,
+            upsert: true
+          });
+
+        if (uploadError) {
+          throw uploadError;
+        }
+
+        // Gerar URL pública do documento
+        const { data: urlData } = supabase.storage
+          .from('merchant-documents')
+          .getPublicUrl(filename);
+
+        documentUrls[type] = urlData.publicUrl;
+
+      } catch (error) {
+        logger.error(`Error uploading ${type} document`, {
+          error,
+          userId,
+          type
+        });
+        throw new BadRequestException(`Erro ao fazer upload do documento ${type}: ${error.message}`);
+      }
+    }
+
+    return documentUrls;
   }
 
   async getMerchantById(id: string) {

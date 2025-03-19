@@ -138,7 +138,7 @@ export class PixService {
         cpf: params.cpf,
         cnpj: params.cnpj,
         paginacao: {
-          pagina: params.page || 1, // Changed from paginaAtual to pagina and default to 1
+          pagina: params.page || 1,
           itensPorPagina: params.pageSize || 100
         }
       });

@@ -13,6 +13,8 @@ import { randomUUID } from 'crypto';
 
 @Injectable()
 export class TransactionsService {
+  private readonly ONZ_PIX_KEY = '45e3ded3-e1cf-432c-99c3-11533a5fd7fe'; // Chave PIX da ONZ
+
   constructor(private readonly pixService: PixService) {}
 
   async createPixTransaction(data: CreatePixDto, merchantId: string) {
@@ -80,7 +82,8 @@ export class TransactionsService {
               qr_code: pixCharge.qrCode,
               payment_link: pixCharge.paymentLinkUrl,
               expires_at: expiresAt.toISOString()
-            }
+            },
+            pix_key: this.ONZ_PIX_KEY // Adicionando a chave PIX da ONZ
           }
         ])
         .select()

@@ -1,5 +1,27 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNumber, IsUUID, IsOptional, Min, Max, IsDateString, IsEnum, ValidateIf, IsArray } from 'class-validator';
+import { 
+  IsString, 
+  IsNumber, 
+  IsUUID, 
+  IsOptional, 
+  Min, 
+  Max, 
+  IsEnum, 
+  IsArray, 
+  IsIn 
+} from 'class-validator';
+
+export interface DocumentInfo {
+  url: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_at?: string;
+  reviewed_by?: string;
+  rejection_reason?: string;
+}
+
+export interface MerchantDocumentUrls {
+  [key: string]: DocumentInfo;
+}
 
 export class UpdateMerchantFeeDto {
   @ApiProperty({
@@ -15,9 +37,9 @@ export class UpdateMerchantFeeDto {
     example: 50,
     minimum: 0,
   })
-  @ValidateIf(o => o.fee_type === 'fixed')
   @IsNumber()
   @Min(0)
+  @IsOptional()
   fee_amount?: number;
 
   @ApiProperty({
@@ -26,10 +48,10 @@ export class UpdateMerchantFeeDto {
     minimum: 0,
     maximum: 100,
   })
-  @ValidateIf(o => o.fee_type === 'percentage')
   @IsNumber()
   @Min(0)
   @Max(100)
+  @IsOptional()
   fee_percentage?: number;
 }
 
@@ -40,37 +62,8 @@ export class UpdateMerchantStatusDto {
     enum: ['approved', 'rejected'],
   })
   @IsString()
+  @IsEnum(['approved', 'rejected'])
   status: 'approved' | 'rejected';
-
-  @ApiProperty({
-    description: 'Tipo da taxa',
-    example: 'fixed',
-    enum: ['fixed', 'percentage']
-  })
-  @IsEnum(['fixed', 'percentage'])
-  fee_type: 'fixed' | 'percentage';
-
-  @ApiProperty({
-    description: 'Valor da taxa fixa em centavos',
-    example: 50,
-    minimum: 0,
-  })
-  @ValidateIf(o => o.fee_type === 'fixed')
-  @IsNumber()
-  @Min(0)
-  fee_amount?: number;
-
-  @ApiProperty({
-    description: 'Valor da taxa percentual',
-    example: 2.5,
-    minimum: 0,
-    maximum: 100,
-  })
-  @ValidateIf(o => o.fee_type === 'percentage')
-  @IsNumber()
-  @Min(0)
-  @Max(100)
-  fee_percentage?: number;
 
   @ApiPropertyOptional({
     description: 'Motivo da rejeição',
@@ -79,6 +72,37 @@ export class UpdateMerchantStatusDto {
   @IsString()
   @IsOptional()
   rejection_reason?: string;
+
+  @ApiPropertyOptional({
+    description: 'Tipo da taxa',
+    example: 'fixed',
+    enum: ['fixed', 'percentage']
+  })
+  @IsEnum(['fixed', 'percentage'])
+  @IsOptional()
+  fee_type?: 'fixed' | 'percentage';
+
+  @ApiPropertyOptional({
+    description: 'Valor da taxa fixa em centavos',
+    example: 50,
+    minimum: 0,
+  })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  fee_amount?: number;
+
+  @ApiPropertyOptional({
+    description: 'Valor da taxa percentual',
+    example: 2.5,
+    minimum: 0,
+    maximum: 100,
+  })
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  fee_percentage?: number;
 }
 
 export class DateRangeDto {
@@ -86,14 +110,14 @@ export class DateRangeDto {
     description: 'Data inicial',
     example: '2025-01-01',
   })
-  @IsDateString()
+  @IsString()
   start_date: string;
 
   @ApiProperty({
     description: 'Data final',
     example: '2025-12-31',
   })
-  @IsDateString()
+  @IsString()
   end_date: string;
 }
 
@@ -198,10 +222,12 @@ export class UpdateDocumentStatusDto {
 export class UpdateDocumentsStatusDto {
   @ApiProperty({
     description: 'IDs dos documentos',
-    example: ['uuid1', 'uuid2']
+    example: ['contract', 'cnpj', 'identity', 'selfie', 'bank'],
+    enum: ['contract', 'cnpj', 'identity', 'selfie', 'bank']
   })
   @IsArray()
-  @IsUUID('4', { each: true })
+  @IsString({ each: true })
+  @IsIn(['contract', 'cnpj', 'identity', 'selfie', 'bank'], { each: true })
   document_ids: string[];
 
   @ApiProperty({
