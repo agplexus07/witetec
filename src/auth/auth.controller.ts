@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, UseInterceptors } from '@nestjs/common';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, AdminLoginDto, ChangePasswordDto } from './dto/auth.dto';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
@@ -35,6 +36,7 @@ export class AuthController {
   }
 
   @Get('profile')
+  @UseInterceptors(CacheInterceptor)
   @ApiOperation({ summary: 'Obter perfil do usuário' })
   async getProfile() {
     return this.authService.getProfile();
