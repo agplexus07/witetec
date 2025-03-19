@@ -33,13 +33,24 @@ export class MerchantsService {
         });
       }
 
-      // Obter o usuário atual
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      // Obter token do localStorage
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      
+      if (!token) {
+        throw new BadRequestException({
+          code: 'AUTH_ERROR',
+          message: 'Token de autenticação não encontrado'
+        });
+      }
+
+      // Configurar token no cliente Supabase
+      const { data: { user }, error: userError } = await supabase.auth.getUser(token);
       
       if (userError || !user) {
         throw new BadRequestException({
           code: 'AUTH_ERROR',
-          message: 'Usuário não autenticado'
+          message: 'Usuário não autenticado',
+          details: userError?.message
         });
       }
 
