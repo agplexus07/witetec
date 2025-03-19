@@ -256,12 +256,36 @@ export class AuthService {
       // Buscar dados do comerciante
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('*')
+        .select(`
+          company_name,
+          trading_name,
+          cnpj,
+          email,
+          phone,
+          address,
+          city,
+          state,
+          postal_code,
+          status,
+          balance,
+          fee_percentage,
+          documents_submitted,
+          documents_status,
+          can_generate_api_key,
+          can_withdraw
+        `)
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
-      if (merchantError) {
-        throw new BadRequestException('Erro ao buscar dados do perfil');
+      // Se o comerciante não existir, retornar apenas os dados do usuário
+      if (merchantError || !merchant) {
+        return {
+          personal: {
+            email: user.email,
+            last_sign_in: user.last_sign_in_at,
+          },
+          merchant_status: 'registration_required'
+        };
       }
 
       // Organizar os dados
@@ -284,6 +308,10 @@ export class AuthService {
           postal_code: merchant.postal_code,
         },
         status: merchant.status,
+        documents_submitted: merchant.documents_submitted,
+        documents_status: merchant.documents_status,
+        can_generate_api_key: merchant.can_generate_api_key,
+        can_withdraw: merchant.can_withdraw,
         financial: {
           balance: merchant.balance,
           fee_percentage: merchant.fee_percentage,
