@@ -1,43 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsUUID, IsUrl, IsArray, IsOptional, IsNumber, IsDateString } from 'class-validator';
-
-export class CreateWebhookDto {
-  @ApiProperty({
-    description: 'ID do comerciante',
-    example: '123e4567-e89b-12d3-a456-426614174000'
-  })
-  @IsUUID()
-  merchant_id: string;
-
-  @ApiProperty({
-    description: 'URL do webhook',
-    example: 'https://api.seusite.com.br/webhooks/pix'
-  })
-  @IsUrl({
-    require_tld: false,
-    require_protocol: true,
-    require_valid_protocol: true,
-    protocols: ['http', 'https']
-  })
-  url: string;
-
-  @ApiPropertyOptional({
-    description: 'Descrição do webhook',
-    example: 'Webhook para notificações PIX'
-  })
-  @IsString()
-  @IsOptional()
-  description?: string;
-
-  @ApiPropertyOptional({
-    description: 'Eventos para notificação',
-    example: ['payment.success', 'payment.failed', 'payment.chargeback'],
-    default: ['payment.success', 'payment.failed', 'payment.chargeback']
-  })
-  @IsArray()
-  @IsOptional()
-  events?: string[];
-}
+import { ApiProperty } from '@nestjs/swagger';
+import { IsString } from 'class-validator';
 
 export class OnzWebhookDto {
   @ApiProperty({
@@ -79,34 +41,4 @@ export class OnzWebhookDto {
   })
   @IsString()
   endToEndId: string;
-}
-
-export class ChargebackWebhookDto {
-  @ApiProperty({
-    description: 'ID da transação original',
-    example: '971122d8f37211eaadc10242ac120002'
-  })
-  @IsString()
-  transaction_id: string;
-
-  @ApiProperty({
-    description: 'Valor do chargeback',
-    example: 100.50
-  })
-  @IsNumber()
-  amount: number;
-
-  @ApiProperty({
-    description: 'Data do chargeback',
-    example: '2025-03-19T10:00:00Z'
-  })
-  @IsDateString()
-  chargeback_date: string;
-
-  @ApiProperty({
-    description: 'Motivo do chargeback',
-    example: 'Transação não reconhecida pelo titular'
-  })
-  @IsString()
-  reason: string;
 }
