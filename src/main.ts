@@ -3,12 +3,26 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { json } from 'express';
+import * as compression from 'compression';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: ['error', 'warn'], // Reduzir logging em produção
+  });
 
-  // Configure request size limits
-  app.use(json({ limit: '10mb' })); // Increase JSON body limit to 10MB
+  // Habilitar compressão GZIP
+  app.use(compression());
+
+  // Aumentar limites de payload e timeout
+  app.use(json({ limit: '10mb' }));
+  
+  // Configurar timeouts globais
+  app.use((req, res, next) => {
+    res.setTimeout(30000, () => {
+      res.status(408).send('Request Timeout');
+    });
+    next();
+  });
 
   const config = new DocumentBuilder()
     .setTitle('Sub-Acquirer API')
@@ -48,13 +62,25 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
+  // Validação global com performance otimizada
   app.useGlobalPipes(new ValidationPipe({
     transform: true,
     whitelist: true,
     forbidNonWhitelisted: true,
+    validateCustomDecorators: false,
+    skipMissingProperties: false,
+    skipNullProperties: false,
+    skipUndefinedProperties: false,
   }));
 
-  app.enableCors();
+  // Configurar CORS
+  app.enableCors({
+    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+    credentials: true,
+    maxAge: 86400, // 24 horas de cache CORS
+  });
 
   await app.listen(3000);
 }

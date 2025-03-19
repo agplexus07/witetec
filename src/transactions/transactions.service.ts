@@ -8,14 +8,18 @@ import {
   CheckPixStatusDto
 } from './dto/transaction.dto';
 import { PixService } from '../pix/pix.service';
+import { WebhookSenderService } from '../webhooks/webhook-sender.service';
 import { logger } from '../config/logger.config';
 import { randomUUID } from 'crypto';
 
 @Injectable()
 export class TransactionsService {
-  private readonly ONZ_PIX_KEY = '45e3ded3-e1cf-432c-99c3-11533a5fd7fe'; // Chave PIX da ONZ
+  private readonly ONZ_PIX_KEY = '45e3ded3-e1cf-432c-99c3-11533a5fd7fe';
 
-  constructor(private readonly pixService: PixService) {}
+  constructor(
+    private readonly pixService: PixService,
+    private readonly webhookSenderService: WebhookSenderService
+  ) {}
 
   async createPixTransaction(data: CreatePixDto, merchantId: string) {
     try {
@@ -26,11 +30,9 @@ export class TransactionsService {
         merchantId
       });
 
-      // Gerar ID único para a transação
       const transactionId = randomUUID();
       logger.info('Generated transaction ID', { transactionId });
 
-      // Buscar configuração de taxa do comerciante
       const { data: merchant } = await supabase
         .from('merchants')
         .select('fee_type, fee_amount, fee_percentage')
@@ -41,17 +43,15 @@ export class TransactionsService {
         throw new BadRequestException('Comerciante não encontrado');
       }
 
-      // Calcular taxa baseado no tipo (fixo ou percentual)
       let feeAmount = 0;
       if (merchant.fee_type === 'fixed') {
-        feeAmount = (merchant.fee_amount || 0) / 100; // Converter centavos para reais
+        feeAmount = (merchant.fee_amount || 0) / 100;
       } else {
         feeAmount = (data.amount * (merchant.fee_percentage || 0)) / 100;
       }
 
       const netAmount = data.amount - feeAmount;
 
-      // Gerar cobrança PIX usando o serviço ONZ
       const pixCharge = await this.pixService.createPixCharge({
         amount: data.amount,
         transactionId,
@@ -60,11 +60,9 @@ export class TransactionsService {
         merchantId
       });
 
-      // Calcular data de expiração (1 hora a partir de agora)
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + 1);
 
-      // Salvar transação no banco
       const { data: transaction, error } = await supabase
         .from('transactions')
         .insert([
@@ -83,7 +81,7 @@ export class TransactionsService {
               payment_link: pixCharge.paymentLinkUrl,
               expires_at: expiresAt.toISOString()
             },
-            pix_key: this.ONZ_PIX_KEY // Adicionando a chave PIX da ONZ
+            pix_key: this.ONZ_PIX_KEY
           }
         ])
         .select()
@@ -98,6 +96,22 @@ export class TransactionsService {
         feeAmount,
         expiresAt
       });
+
+      // Notificar o comerciante sobre a nova transação
+      await this.webhookSenderService.sendWebhookNotification(
+        merchantId,
+        'payment.created',
+        {
+          transaction_id: transactionId,
+          amount: data.amount,
+          status: 'pending',
+          expires_at: expiresAt.toISOString(),
+          pix: {
+            qr_code: pixCharge.qrCode,
+            payment_link: pixCharge.paymentLinkUrl
+          }
+        }
+      );
 
       return {
         transaction_id: transactionId,
@@ -130,7 +144,6 @@ export class TransactionsService {
     try {
       logger.info('Checking PIX status', { txid });
 
-      // Buscar transação no banco
       const { data: transaction, error } = await supabase
         .from('transactions')
         .select('*')
@@ -141,14 +154,37 @@ export class TransactionsService {
         throw new NotFoundException('Transação não encontrada');
       }
 
-      // Consultar status na ONZ
       const pixStatus = await this.pixService.getPixStatus(txid);
 
-      // Se o status mudou, atualizar no banco
       if (pixStatus.status !== transaction.status) {
         await this.updateTransactionStatus(transaction.id, {
           status: pixStatus.status
         });
+
+        // Notificar mudança de status
+        if (pixStatus.status === 'completed') {
+          await this.webhookSenderService.sendWebhookNotification(
+            transaction.merchant_id,
+            'payment.success',
+            {
+              transaction_id: txid,
+              amount: transaction.amount,
+              status: pixStatus.status,
+              paid_at: pixStatus.paidAt,
+              payer_info: transaction.payer_info
+            }
+          );
+        } else if (pixStatus.status === 'failed') {
+          await this.webhookSenderService.sendWebhookNotification(
+            transaction.merchant_id,
+            'payment.failed',
+            {
+              transaction_id: txid,
+              amount: transaction.amount,
+              status: pixStatus.status
+            }
+          );
+        }
       }
 
       logger.info('PIX status checked', {
@@ -177,7 +213,6 @@ export class TransactionsService {
 
   async updateTransactionStatus(id: string, data: UpdateTransactionStatusDto) {
     try {
-      // Buscar transação atual
       const { data: currentTransaction, error: fetchError } = await supabase
         .from('transactions')
         .select('*')
@@ -188,22 +223,20 @@ export class TransactionsService {
         throw new NotFoundException('Transação não encontrada');
       }
 
-      // Verificar se já não está em um estado final
       if (['completed', 'failed'].includes(currentTransaction.status)) {
         throw new BadRequestException('Transação já está em estado final');
       }
 
-      // Se a transação estiver expirada mas recebemos confirmação de pagamento, permitir a atualização
       if (currentTransaction.status === 'expired' && data.status !== 'completed') {
         throw new BadRequestException('Transação expirada não pode ser atualizada');
       }
 
-      // Atualizar status
       const { data: transaction, error } = await supabase
         .from('transactions')
         .update({ 
           status: data.status,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          paid_at: data.status === 'completed' ? new Date().toISOString() : null
         })
         .eq('id', id)
         .select()
@@ -211,20 +244,41 @@ export class TransactionsService {
 
       if (error) throw error;
 
-      // Se a transação foi completada, atualizar o saldo do comerciante
       if (data.status === 'completed' && currentTransaction.status !== 'completed') {
         await this.updateMerchantBalance(transaction.merchant_id, transaction.net_amount);
-        logger.info('Merchant balance updated after successful transaction', {
-          merchantId: transaction.merchant_id,
-          amount: transaction.net_amount
+        
+        await this.webhookSenderService.sendWebhookNotification(
+          transaction.merchant_id,
+          'payment.success',
+          {
+            transaction_id: transaction.transaction_id,
+            amount: transaction.amount,
+            status: transaction.status,
+            paid_at: transaction.paid_at,
+            payer_info: transaction.payer_info
+          }
+        );
+
+        logger.info('Transaction completed and webhook sent', {
+          transactionId: id,
+          merchantId: transaction.merchant_id
+        });
+      } else if (data.status === 'failed' && currentTransaction.status !== 'failed') {
+        await this.webhookSenderService.sendWebhookNotification(
+          transaction.merchant_id,
+          'payment.failed',
+          {
+            transaction_id: transaction.transaction_id,
+            amount: transaction.amount,
+            status: transaction.status
+          }
+        );
+
+        logger.info('Transaction failed and webhook sent', {
+          transactionId: id,
+          merchantId: transaction.merchant_id
         });
       }
-
-      logger.info('Transaction status updated', {
-        transactionId: id,
-        oldStatus: currentTransaction.status,
-        newStatus: data.status
-      });
 
       return transaction;
     } catch (error) {
