@@ -1,5 +1,29 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsNumber, Min, Max, IsEnum, Matches } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsObject, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+class DocumentFile {
+  @ApiProperty({
+    description: 'Base64 do arquivo',
+    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRg...'
+  })
+  @IsString()
+  base64: string;
+
+  @ApiProperty({
+    description: 'Tipo do documento',
+    example: 'cnpj'
+  })
+  @IsString()
+  type: string;
+}
+
+class DocumentGroup {
+  @ApiProperty({ type: DocumentFile })
+  @ValidateNested()
+  @Type(() => DocumentFile)
+  file: DocumentFile;
+}
 
 export class CreateMerchantDto {
   @ApiProperty({
@@ -72,72 +96,40 @@ export class CreateMerchantDto {
   postal_code?: string;
 
   @ApiProperty({
-    description: 'Contrato Social em base64',
-    example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
+    description: 'Documentos do comerciante',
+    type: Object
   })
-  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
-    message: 'O documento deve estar no formato base64 com o prefixo data:'
-  })
-  contract_document: string;
-
-  @ApiProperty({
-    description: 'Cartão CNPJ em base64',
-    example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
-  })
-  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
-    message: 'O documento deve estar no formato base64 com o prefixo data:'
-  })
-  cnpj_document: string;
-
-  @ApiProperty({
-    description: 'Documento de Identidade em base64',
-    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAA...'
-  })
-  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
-    message: 'O documento deve estar no formato base64 com o prefixo data:'
-  })
-  identity_document: string;
-
-  @ApiProperty({
-    description: 'Selfie com documento em base64',
-    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAA...'
-  })
-  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
-    message: 'O documento deve estar no formato base64 com o prefixo data:'
-  })
-  identity_selfie: string;
-
-  @ApiProperty({
-    description: 'Comprovante bancário em base64',
-    example: 'data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50...'
-  })
-  @Matches(/^data:([A-Za-z-+\/]+);base64,.+$/, {
-    message: 'O documento deve estar no formato base64 com o prefixo data:'
-  })
-  bank_document: string;
+  @IsObject()
+  @ValidateNested()
+  @Type(() => Object)
+  documents: {
+    cnpj: DocumentGroup;
+    identity: DocumentGroup;
+    selfie: DocumentGroup;
+  };
 }
 
 export class MerchantStatisticsDto {
   @ApiProperty({
-    description: 'Volume PIX do dia',
+    description: 'Volume PIX hoje',
     example: 1000.00
   })
   pixToday: number;
 
   @ApiProperty({
-    description: 'Volume PIX dos últimos 30 dias',
+    description: 'Volume PIX últimos 30 dias',
     example: 15000.00
   })
   pix30Days: number;
 
   @ApiProperty({
     description: 'Total de transações',
-    example: 150
+    example: 50
   })
   totalTransactions: number;
 
   @ApiProperty({
-    description: 'Saldo disponível para saque',
+    description: 'Saldo disponível',
     example: 5000.00
   })
   availableBalance: number;
