@@ -45,26 +45,139 @@ export class MerchantsService {
         });
       }
 
-      // Upload dos documentos com retentativas
-      let documentUrls;
-      for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      // Preparar documentos para upload
+      const documentUrls = {};
+      for (const [docType, base64Data] of Object.entries(merchantData.documents)) {
         try {
-          documentUrls = await this.uploadDocuments(user.id, merchantData.documents);
-          break;
-        } catch (error) {
-          if (attempt === this.MAX_RETRIES) {
-            logger.error('Todas as tentativas de upload falharam', {
-              error,
-              userId: user.id,
-              attempts: attempt
-            });
+          if (!base64Data) {
             throw new BadRequestException({
-              code: 'UPLOAD_ERROR',
-              message: 'Erro ao fazer upload dos documentos. Por favor, tente novamente.',
-              details: error.message
+              code: 'INVALID_FILE_FORMAT',
+              message: `Dados inválidos para o documento ${docType}`,
+              field: docType
             });
           }
-          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+
+          // Verificar se o base64 está no formato correto
+          if (!base64Data.startsWith('data:')) {
+            throw new BadRequestException({
+              code: 'INVALID_FILE_FORMAT',
+              message: `Formato inválido para documento ${docType}. Deve iniciar com data:`,
+              field: docType
+            });
+          }
+
+          // Extrair o tipo MIME e os dados do base64
+          const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+          
+          if (!matches || matches.length !== 3) {
+            throw new BadRequestException({
+              code: 'INVALID_FILE_FORMAT',
+              message: `Formato inválido para documento ${docType}`,
+              field: docType
+            });
+          }
+
+          const mimeType = matches[1];
+          const base64File = matches[2];
+          
+          // Validar tipo MIME
+          const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
+          if (!allowedMimes.includes(mimeType)) {
+            throw new BadRequestException({
+              code: 'INVALID_FILE_TYPE',
+              message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`,
+              field: docType
+            });
+          }
+
+          const buffer = Buffer.from(base64File, 'base64');
+          
+          // Validar tamanho (5MB)
+          const maxSize = 5 * 1024 * 1024; // 5MB em bytes
+          if (buffer.length > maxSize) {
+            throw new BadRequestException({
+              code: 'FILE_TOO_LARGE',
+              message: `O arquivo ${docType} excede o tamanho máximo permitido de 5MB`,
+              field: docType
+            });
+          }
+
+          // Determinar a extensão do arquivo
+          let extension;
+          switch (mimeType) {
+            case 'application/pdf':
+              extension = 'pdf';
+              break;
+            case 'image/jpeg':
+              extension = 'jpg';
+              break;
+            case 'image/png':
+              extension = 'png';
+              break;
+            default:
+              throw new BadRequestException({
+                code: 'INVALID_FILE_TYPE',
+                message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}`,
+                field: docType
+              });
+          }
+
+          const filename = `${user.id}/${docType}.${extension}`;
+
+          // Upload do arquivo com retentativas
+          let uploadSuccess = false;
+          for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+            try {
+              const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('merchant-documents')
+                .upload(filename, buffer, {
+                  contentType: mimeType,
+                  upsert: true
+                });
+
+              if (uploadError) throw uploadError;
+
+              // Gerar URL pública do documento
+              const { data: urlData } = supabase.storage
+                .from('merchant-documents')
+                .getPublicUrl(filename);
+
+              documentUrls[docType] = {
+                url: urlData.publicUrl,
+                status: 'pending',
+                uploaded_at: new Date().toISOString()
+              };
+
+              uploadSuccess = true;
+              break;
+            } catch (error) {
+              if (attempt === this.MAX_RETRIES) {
+                throw new BadRequestException({
+                  code: 'UPLOAD_ERROR',
+                  message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
+                  field: docType,
+                  details: error.message
+                });
+              }
+              await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+            }
+          }
+
+          if (!uploadSuccess) {
+            throw new BadRequestException({
+              code: 'UPLOAD_ERROR',
+              message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
+              field: docType
+            });
+          }
+
+        } catch (error) {
+          logger.error(`Error uploading document ${docType}`, {
+            error,
+            userId: user.id,
+            docType
+          });
+          throw error;
         }
       }
 
@@ -159,161 +272,6 @@ export class MerchantsService {
         message: 'Erro ao processar o registro. Por favor, tente novamente.',
         details: error.message
       });
-    }
-  }
-
-  private async uploadDocuments(userId: string, documents: Record<string, { base64: string }>) {
-    try {
-      const documentUrls: Record<string, any> = {};
-
-      // Processar cada tipo de documento (cnpj, identity, selfie)
-      for (const [docType, docData] of Object.entries(documents)) {
-        try {
-          logger.info(`Iniciando upload do documento ${docType}`, {
-            userId,
-            documentType: docType,
-            hasData: !!docData
-          });
-
-          if (!docData || !docData.base64) {
-            throw new BadRequestException({
-              code: 'INVALID_FILE_FORMAT',
-              message: `Dados inválidos para o documento ${docType}`,
-              field: docType
-            });
-          }
-
-          // Verificar se o base64 está no formato correto
-          if (!docData.base64.startsWith('data:')) {
-            throw new BadRequestException({
-              code: 'INVALID_FILE_FORMAT',
-              message: `Formato inválido para documento ${docType}. Deve iniciar com data:`,
-              field: docType
-            });
-          }
-
-          // Extrair o tipo MIME e os dados do base64
-          const matches = docData.base64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-          
-          if (!matches || matches.length !== 3) {
-            throw new BadRequestException({
-              code: 'INVALID_FILE_FORMAT',
-              message: `Formato inválido para documento ${docType}`,
-              field: docType
-            });
-          }
-
-          const mimeType = matches[1];
-          const base64File = matches[2];
-          
-          // Validar tipo MIME
-          const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
-          if (!allowedMimes.includes(mimeType)) {
-            throw new BadRequestException({
-              code: 'INVALID_FILE_TYPE',
-              message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`,
-              field: docType
-            });
-          }
-
-          const buffer = Buffer.from(base64File, 'base64');
-          
-          // Validar tamanho (5MB)
-          const maxSize = 5 * 1024 * 1024; // 5MB em bytes
-          if (buffer.length > maxSize) {
-            throw new BadRequestException({
-              code: 'FILE_TOO_LARGE',
-              message: `O arquivo ${docType} excede o tamanho máximo permitido de 5MB`,
-              field: docType
-            });
-          }
-
-          // Determinar a extensão do arquivo
-          let extension;
-          switch (mimeType) {
-            case 'application/pdf':
-              extension = 'pdf';
-              break;
-            case 'image/jpeg':
-              extension = 'jpg';
-              break;
-            case 'image/png':
-              extension = 'png';
-              break;
-            default:
-              throw new BadRequestException({
-                code: 'INVALID_FILE_TYPE',
-                message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}`,
-                field: docType
-              });
-          }
-
-          const filename = `${userId}/${docType}.${extension}`;
-
-          // Upload do arquivo com retentativas
-          let uploadSuccess = false;
-          for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
-            try {
-              const { data: uploadData, error: uploadError } = await supabase.storage
-                .from('merchant-documents')
-                .upload(filename, buffer, {
-                  contentType: mimeType,
-                  upsert: true
-                });
-
-              if (uploadError) throw uploadError;
-
-              // Gerar URL pública do documento
-              const { data: urlData } = supabase.storage
-                .from('merchant-documents')
-                .getPublicUrl(filename);
-
-              documentUrls[docType] = {
-                url: urlData.publicUrl,
-                status: 'pending',
-                uploaded_at: new Date().toISOString()
-              };
-
-              uploadSuccess = true;
-              break;
-            } catch (error) {
-              if (attempt === this.MAX_RETRIES) {
-                throw new BadRequestException({
-                  code: 'UPLOAD_ERROR',
-                  message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
-                  field: docType,
-                  details: error.message
-                });
-              }
-              await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
-            }
-          }
-
-          if (!uploadSuccess) {
-            throw new BadRequestException({
-              code: 'UPLOAD_ERROR',
-              message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
-              field: docType
-            });
-          }
-
-        } catch (error) {
-          logger.error(`Error uploading document ${docType}`, {
-            error,
-            userId,
-            docType
-          });
-          throw error;
-        }
-      }
-
-      return documentUrls;
-    } catch (error) {
-      logger.error('Error in uploadDocuments', {
-        error,
-        userId
-      });
-      throw error;
     }
   }
 
