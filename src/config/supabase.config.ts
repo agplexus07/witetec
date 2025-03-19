@@ -7,35 +7,6 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true,
-    storage: {
-      getItem: (key) => {
-        if (typeof window !== 'undefined') {
-          return window.localStorage.getItem(key);
-        }
-        return null;
-      },
-      setItem: (key, value) => {
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(key, value);
-        }
-      },
-      removeItem: (key) => {
-        if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(key);
-        }
-      }
-    }
+    detectSessionInUrl: true
   }
 });
-
-// Initialize session from localStorage if available
-if (typeof window !== 'undefined') {
-  const token = window.localStorage.getItem('token');
-  if (token) {
-    supabase.auth.setSession({
-      access_token: token,
-      refresh_token: ''
-    });
-  }
-}
