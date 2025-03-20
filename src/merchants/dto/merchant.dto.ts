@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsObject } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsObject, IsNumber } from 'class-validator';
 
 export class CreateMerchantDto {
   @ApiProperty({
@@ -92,47 +92,64 @@ export class MerchantStatisticsDto {
     description: 'Volume PIX hoje',
     example: 1000.00
   })
+  @IsNumber()
   pixToday: number;
 
   @ApiProperty({
     description: 'Volume PIX últimos 30 dias',
     example: 15000.00
   })
+  @IsNumber()
   pix30Days: number;
 
   @ApiProperty({
     description: 'Total de transações',
     example: 50
   })
+  @IsNumber()
   totalTransactions: number;
 
   @ApiProperty({
     description: 'Saldo disponível',
     example: 5000.00
   })
+  @IsNumber()
   availableBalance: number;
 
   @ApiProperty({
     description: 'Saldo pendente',
     example: 1000.00
   })
+  @IsNumber()
   pendingBalance: number;
 
   @ApiProperty({
     description: 'Taxa de sucesso (%)',
     example: 98.5
   })
+  @IsNumber()
   successRate: number;
 
   @ApiProperty({
     description: 'Ticket médio',
     example: 250.00
   })
+  @IsNumber()
   averageTicket: number;
 
   @ApiProperty({
     description: 'Taxa de chargeback (%)',
     example: 0.5
   })
+  @IsNumber()
   chargebackRate: number;
+}
+
+export interface ApiResponse<T> {
+  status: 'success' | 'error';
+  data?: T;
+  message?: string;
+  code?: string;
+  statusCode?: number;
+  details?: string;
 }

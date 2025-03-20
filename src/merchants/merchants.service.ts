@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
-import { CreateMerchantDto } from './dto/merchant.dto';
+import { CreateMerchantDto, ApiResponse, MerchantStatisticsDto } from './dto/merchant.dto';
 import { Request } from 'express';
 
 @Injectable()
@@ -26,36 +26,39 @@ export class MerchantsService {
 
       const missingFields = requiredFields.filter(field => !merchantData[field]);
       if (missingFields.length > 0) {
-        throw new BadRequestException({
+        return {
+          status: 'error',
           code: 'MISSING_FIELDS',
           message: `Campos obrigatórios faltando: ${missingFields.join(', ')}`,
           fields: missingFields,
           statusCode: 400
-        });
+        };
       }
 
       // Obter usuário atual
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError || !user) {
-        throw new BadRequestException({
+        return {
+          status: 'error',
           code: 'AUTH_ERROR',
           message: 'Usuário não autenticado',
           statusCode: 401,
           details: userError?.message
-        });
+        };
       }
 
       // Obter sessão atual
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
       if (sessionError || !session) {
-        throw new BadRequestException({
+        return {
+          status: 'error',
           code: 'AUTH_ERROR',
           message: 'Sessão inválida',
           statusCode: 401,
           details: sessionError?.message
-        });
+        };
       }
 
       // Preparar documentos para upload
@@ -63,34 +66,37 @@ export class MerchantsService {
       for (const [docType, base64Data] of Object.entries(merchantData.documents)) {
         try {
           if (!base64Data) {
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'INVALID_FILE_FORMAT',
               message: `Dados inválidos para o documento ${docType}`,
               field: docType,
               statusCode: 400
-            });
+            };
           }
 
           // Verificar se o base64 está no formato correto
           if (!base64Data.startsWith('data:')) {
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'INVALID_FILE_FORMAT',
               message: `Formato inválido para documento ${docType}. Deve iniciar com data:`,
               field: docType,
               statusCode: 400
-            });
+            };
           }
 
           // Extrair o tipo MIME e os dados do base64
           const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
           
           if (!matches || matches.length !== 3) {
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'INVALID_FILE_FORMAT',
               message: `Formato inválido para documento ${docType}`,
               field: docType,
               statusCode: 400
-            });
+            };
           }
 
           const mimeType = matches[1];
@@ -99,12 +105,13 @@ export class MerchantsService {
           // Validar tipo MIME
           const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
           if (!allowedMimes.includes(mimeType)) {
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'INVALID_FILE_TYPE',
               message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}. Tipos permitidos: PDF, JPEG ou PNG`,
               field: docType,
               statusCode: 400
-            });
+            };
           }
 
           const buffer = Buffer.from(base64File, 'base64');
@@ -112,12 +119,13 @@ export class MerchantsService {
           // Validar tamanho (5MB)
           const maxSize = 5 * 1024 * 1024; // 5MB em bytes
           if (buffer.length > maxSize) {
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'FILE_TOO_LARGE',
               message: `O arquivo ${docType} excede o tamanho máximo permitido de 5MB`,
               field: docType,
               statusCode: 400
-            });
+            };
           }
 
           // Determinar a extensão do arquivo
@@ -133,12 +141,13 @@ export class MerchantsService {
               extension = 'png';
               break;
             default:
-              throw new BadRequestException({
+              return {
+                status: 'error',
                 code: 'INVALID_FILE_TYPE',
                 message: `Tipo de arquivo não suportado para ${docType}: ${mimeType}`,
                 field: docType,
                 statusCode: 400
-              });
+              };
           }
 
           const filename = `${user.id}/${docType}.${extension}`;
@@ -171,25 +180,27 @@ export class MerchantsService {
               break;
             } catch (error) {
               if (attempt === this.MAX_RETRIES) {
-                throw new BadRequestException({
+                return {
+                  status: 'error',
                   code: 'UPLOAD_ERROR',
                   message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
                   field: docType,
                   statusCode: 400,
                   details: error.message
-                });
+                };
               }
               await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
             }
           }
 
           if (!uploadSuccess) {
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'UPLOAD_ERROR',
               message: `Erro ao fazer upload do documento ${docType}. Por favor, tente novamente.`,
               field: docType,
               statusCode: 400
-            });
+            };
           }
 
         } catch (error) {
@@ -233,20 +244,22 @@ export class MerchantsService {
           if (error) {
             if (error.message.includes('duplicate key')) {
               if (error.message.includes('email')) {
-                throw new BadRequestException({
+                return {
+                  status: 'error',
                   code: 'EMAIL_IN_USE',
                   message: 'Email já cadastrado. Por favor, utilize outro email.',
                   field: 'email',
                   statusCode: 400
-                });
+                };
               }
               if (error.message.includes('cnpj')) {
-                throw new BadRequestException({
+                return {
+                  status: 'error',
                   code: 'CNPJ_IN_USE',
                   message: 'CNPJ já cadastrado. Por favor, verifique os dados.',
                   field: 'cnpj',
                   statusCode: 400
-                });
+                };
               }
             }
             throw error;
@@ -261,12 +274,13 @@ export class MerchantsService {
               userId: user.id,
               attempts: attempt
             });
-            throw new BadRequestException({
+            return {
+              status: 'error',
               code: 'REGISTRATION_ERROR',
               message: 'Erro ao criar registro do comerciante. Por favor, tente novamente.',
               statusCode: 400,
               details: error.message
-            });
+            };
           }
           await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
         }
@@ -279,13 +293,16 @@ export class MerchantsService {
 
       // Retornar resposta no formato esperado
       return {
-        id: merchant.id,
-        company_name: merchant.company_name,
-        status: merchant.status,
-        session: {
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-          expires_in: session.expires_in
+        status: 'success',
+        data: {
+          id: merchant.id,
+          company_name: merchant.company_name,
+          status: merchant.status,
+          session: {
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+            expires_in: session.expires_in
+          }
         },
         message: 'Cadastro realizado com sucesso. Os documentos estão em análise.'
       };
@@ -306,15 +323,22 @@ export class MerchantsService {
       });
 
       if (error instanceof BadRequestException) {
-        throw error;
+        return {
+          status: 'error',
+          code: error.getResponse()['code'] || 'BAD_REQUEST',
+          message: error.message,
+          statusCode: error.getStatus(),
+          details: error.getResponse()['details']
+        };
       }
 
-      throw new BadRequestException({
+      return {
+        status: 'error',
         code: 'UNKNOWN_ERROR',
         message: 'Erro ao processar o registro. Por favor, tente novamente.',
         statusCode: 500,
         details: error.message
-      });
+      };
     }
   }
 
@@ -329,17 +353,36 @@ export class MerchantsService {
       if (error) throw error;
       if (!data) throw new NotFoundException('Comerciante não encontrado');
 
-      return data;
+      return {
+        status: 'success',
+        data
+      };
     } catch (error) {
       logger.error('Error fetching merchant', {
         error,
         merchantId: id
       });
-      throw error;
+
+      if (error instanceof NotFoundException) {
+        return {
+          status: 'error',
+          code: 'NOT_FOUND',
+          message: error.message,
+          statusCode: 404
+        };
+      }
+
+      return {
+        status: 'error',
+        code: 'FETCH_ERROR',
+        message: 'Erro ao buscar dados do comerciante',
+        statusCode: 500,
+        details: error.message
+      };
     }
   }
 
-  async getMerchantStatistics(merchantId: string) {
+  async getMerchantStatistics(merchantId: string): Promise<ApiResponse<MerchantStatisticsDto>> {
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -365,7 +408,7 @@ export class MerchantsService {
 
       if (merchantError) throw merchantError;
 
-      const stats = {
+      const stats: MerchantStatisticsDto = {
         pixToday: 0,
         pix30Days: 0,
         totalTransactions: transactions?.length || 0,
@@ -406,13 +449,23 @@ export class MerchantsService {
         stats
       });
 
-      return stats;
+      return {
+        status: 'success',
+        data: stats
+      };
     } catch (error) {
       logger.error('Error calculating merchant statistics', {
         error,
         merchantId
       });
-      throw error;
+
+      return {
+        status: 'error',
+        code: 'STATS_ERROR',
+        message: 'Erro ao calcular estatísticas do comerciante',
+        statusCode: 500,
+        details: error.message
+      };
     }
   }
 
@@ -477,13 +530,23 @@ export class MerchantsService {
         stats
       });
 
-      return stats;
+      return {
+        status: 'success',
+        data: stats
+      };
     } catch (error) {
       logger.error('Error calculating dashboard stats', {
         error,
         merchantId
       });
-      throw error;
+
+      return {
+        status: 'error',
+        code: 'DASHBOARD_ERROR',
+        message: 'Erro ao calcular estatísticas do dashboard',
+        statusCode: 500,
+        details: error.message
+      };
     }
   }
 }
