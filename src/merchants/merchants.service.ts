@@ -4,6 +4,11 @@ import { logger } from '../config/logger.config';
 import { CreateMerchantDto, ApiResponse, MerchantStatisticsDto } from './dto/merchant.dto';
 import { Request } from 'express';
 
+interface MerchantCapabilities {
+  can_generate_api_key: boolean;
+  can_withdraw: boolean;
+}
+
 @Injectable()
 export class MerchantsService {
   private readonly MAX_RETRIES = 3;
@@ -17,7 +22,7 @@ export class MerchantsService {
   }> {
     const { data: merchant, error } = await supabase
       .from('merchants')
-      .select('status, document_urls, can_withdraw, can_generate_api_key')
+      .select('status, document_urls')
       .eq('id', merchantId)
       .single();
 
@@ -25,14 +30,22 @@ export class MerchantsService {
       throw new NotFoundException('Comerciante não encontrado');
     }
 
+    const { data: capabilities, error: capabilitiesError } = await supabase
+      .rpc('check_merchant_capabilities', {
+        merchant_id: merchantId
+      })
+      .single() as { data: MerchantCapabilities | null, error: any };
+
+    if (capabilitiesError) throw capabilitiesError;
+
     const documentUrls = merchant.document_urls as Record<string, any> || {};
     const documentsApproved = Object.values(documentUrls).every(
       doc => doc.status === 'approved'
     );
 
     return {
-      canWithdraw: merchant.can_withdraw,
-      canGenerateApiKey: merchant.can_generate_api_key,
+      canWithdraw: capabilities?.can_withdraw || false,
+      canGenerateApiKey: capabilities?.can_generate_api_key || false,
       documentsApproved,
       status: merchant.status
     };
@@ -267,9 +280,7 @@ export class MerchantsService {
               documents_submitted: true,
               documents_status: 'pending',
               fee_type: 'percentage',
-              fee_percentage: 2.99,
-              can_generate_api_key: false,
-              can_withdraw: false
+              fee_percentage: 2.99
             }])
             .select()
             .single();
@@ -432,18 +443,26 @@ export class MerchantsService {
 
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('balance, can_withdraw')
+        .select('balance')
         .eq('id', merchantId)
         .single();
 
       if (merchantError) throw merchantError;
 
+      const { data: capabilities, error: capabilitiesError } = await supabase
+        .rpc('check_merchant_capabilities', {
+          merchant_id: merchantId
+        })
+        .single() as { data: MerchantCapabilities | null, error: any };
+
+      if (capabilitiesError) throw capabilitiesError;
+
       const stats: MerchantStatisticsDto = {
         pixToday: 0,
         pix30Days: 0,
         totalTransactions: transactions?.length || 0,
-        availableBalance: merchant?.can_withdraw ? (merchant?.balance || 0) : 0,
-        pendingBalance: !merchant?.can_withdraw ? (merchant?.balance || 0) : 0,
+        availableBalance: capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
+        pendingBalance: !capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
         successRate: 0,
         averageTicket: 0,
         chargebackRate: 0
@@ -514,11 +533,19 @@ export class MerchantsService {
 
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('balance, can_withdraw, documents_status, documents_submitted')
+        .select('balance, documents_status, documents_submitted')
         .eq('id', merchantId)
         .single();
 
       if (merchantError) throw merchantError;
+
+      const { data: capabilities, error: capabilitiesError } = await supabase
+        .rpc('check_merchant_capabilities', {
+          merchant_id: merchantId
+        })
+        .single() as { data: MerchantCapabilities | null, error: any };
+
+      if (capabilitiesError) throw capabilitiesError;
 
       const stats = {
         pixToday: 0,
@@ -527,10 +554,10 @@ export class MerchantsService {
         successRate: 0,
         averageTicket: 0,
         chargebackRate: 0,
-        availableBalance: merchant?.can_withdraw ? (merchant?.balance || 0) : 0,
+        availableBalance: capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
         documentsStatus: merchant?.documents_status || 'pending',
         documentsSubmitted: merchant?.documents_submitted || false,
-        canWithdraw: merchant?.can_withdraw || false
+        canWithdraw: capabilities?.can_withdraw || false
       };
 
       if (transactions?.length) {
