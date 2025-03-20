@@ -3,6 +3,11 @@ import { supabase } from '../config/supabase.config';
 import { logger } from '../config/logger.config';
 import { ChangePasswordDto } from './dto/auth.dto';
 
+interface MerchantCapabilities {
+  can_generate_api_key: boolean;
+  can_withdraw: boolean;
+}
+
 @Injectable()
 export class AuthService {
   private lastRegistrationAttempt: number = 0;
@@ -25,7 +30,7 @@ export class AuthService {
       // Verificar se existe registro do comerciante
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('status, rejection_reason, documents_submitted, documents_status, can_generate_api_key, can_withdraw')
+        .select('status, rejection_reason, documents_submitted, documents_status')
         .eq('id', authData.user.id)
         .maybeSingle();
 
@@ -45,6 +50,15 @@ export class AuthService {
         };
       }
 
+      // Obter capacidades do comerciante usando a nova função
+      const { data: capabilities, error: capabilitiesError } = await supabase
+        .rpc('check_merchant_capabilities', {
+          merchant_id: authData.user.id
+        })
+        .single() as { data: MerchantCapabilities | null, error: any };
+
+      if (capabilitiesError) throw capabilitiesError;
+
       // Verificar status do comerciante
       switch (merchant.status) {
         case 'pending':
@@ -57,8 +71,8 @@ export class AuthService {
             merchant_status: 'pending',
             documents_submitted: merchant.documents_submitted,
             documents_status: merchant.documents_status,
-            can_generate_api_key: merchant.can_generate_api_key,
-            can_withdraw: merchant.can_withdraw,
+            can_generate_api_key: capabilities?.can_generate_api_key || false,
+            can_withdraw: capabilities?.can_withdraw || false,
             message: merchant.documents_submitted ? 
               'Documentos em análise. Aguardando aprovação.' : 
               'Cadastro realizado. Envie os documentos para ativar todas as funcionalidades.'
@@ -86,8 +100,8 @@ export class AuthService {
             merchant_status: 'approved',
             documents_submitted: merchant.documents_submitted,
             documents_status: merchant.documents_status,
-            can_generate_api_key: merchant.can_generate_api_key,
-            can_withdraw: merchant.can_withdraw,
+            can_generate_api_key: capabilities?.can_generate_api_key || false,
+            can_withdraw: capabilities?.can_withdraw || false,
             message: 'Login realizado com sucesso.'
           };
 
@@ -278,9 +292,7 @@ export class AuthService {
           balance,
           fee_percentage,
           documents_submitted,
-          documents_status,
-          can_generate_api_key,
-          can_withdraw
+          documents_status
         `)
         .eq('id', user.id)
         .maybeSingle();
@@ -295,6 +307,15 @@ export class AuthService {
           merchant_status: 'registration_required'
         };
       }
+
+      // Obter capacidades do comerciante
+      const { data: capabilities, error: capabilitiesError } = await supabase
+        .rpc('check_merchant_capabilities', {
+          merchant_id: user.id
+        })
+        .single() as { data: MerchantCapabilities | null, error: any };
+
+      if (capabilitiesError) throw capabilitiesError;
 
       // Organizar os dados
       return {
@@ -318,8 +339,8 @@ export class AuthService {
         status: merchant.status,
         documents_submitted: merchant.documents_submitted,
         documents_status: merchant.documents_status,
-        can_generate_api_key: merchant.can_generate_api_key,
-        can_withdraw: merchant.can_withdraw,
+        can_generate_api_key: capabilities?.can_generate_api_key || false,
+        can_withdraw: capabilities?.can_withdraw || false,
         financial: {
           balance: merchant.balance,
           fee_percentage: merchant.fee_percentage,
