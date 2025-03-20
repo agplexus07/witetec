@@ -2,6 +2,7 @@ import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { TransactionsService } from '../transactions/transactions.service';
 import { logger } from '../config/logger.config';
+import { supabase } from '../config/supabase.config';
 
 @ApiTags('webhooks')
 @Controller('webhooks/onz/pix')
@@ -22,20 +23,61 @@ export class OnzWebhookController {
       if (payload.event === 'pix.received') {
         const { endToEndId, txid, valor, horario, pagador } = payload.data;
 
-        // Buscar transação pelo transaction_id (txid)
-        const { data: transaction } = await this.transactionsService.getTransactionDetails(txid);
+        // Primeiro, tentar buscar pelo transaction_id
+        const { data: transactions, error } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('transaction_id', txid)
+          .single();
 
-        if (!transaction) {
-          logger.warn('Transação não encontrada', { txid });
-          return { 
-            status: 'error',
-            message: 'Transação não encontrada',
-            txid 
+        if (error || !transactions) {
+          logger.warn('Transação não encontrada pelo transaction_id', { 
+            txid,
+            error: error?.message 
+          });
+
+          // Tentar buscar pelo ID diretamente
+          const { data: transactionById, error: errorById } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('id', txid)
+            .single();
+
+          if (errorById || !transactionById) {
+            logger.error('Transação não encontrada em nenhuma busca', {
+              txid,
+              endToEndId,
+              error: errorById?.message
+            });
+
+            return { 
+              status: 'error',
+              message: 'Transação não encontrada',
+              txid,
+              endToEndId
+            };
+          }
+
+          // Se encontrou pelo ID
+          await this.transactionsService.updateTransactionStatus(transactionById.id, {
+            status: 'completed'
+          });
+
+          logger.info('PIX processado com sucesso (busca por ID)', {
+            txid: transactionById.id,
+            endToEndId,
+            valor
+          });
+
+          return {
+            status: 'success',
+            message: 'PIX processado com sucesso',
+            txid: transactionById.id
           };
         }
 
-        // Atualizar status da transação
-        await this.transactionsService.updateTransactionStatus(transaction.id, {
+        // Se encontrou pelo transaction_id
+        await this.transactionsService.updateTransactionStatus(transactions.id, {
           status: 'completed'
         });
 
