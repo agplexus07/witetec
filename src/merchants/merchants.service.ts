@@ -533,19 +533,15 @@ export class MerchantsService {
 
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('balance, documents_status, documents_submitted')
+        .select('balance, documents_status, documents_submitted, status')
         .eq('id', merchantId)
         .single();
 
       if (merchantError) throw merchantError;
 
-      const { data: capabilities, error: capabilitiesError } = await supabase
-        .rpc('check_merchant_capabilities', {
-          merchant_id: merchantId
-        })
-        .single() as { data: MerchantCapabilities | null, error: any };
-
-      if (capabilitiesError) throw capabilitiesError;
+      const canWithdraw = merchant.status === 'approved' && 
+                         merchant.documents_submitted && 
+                         merchant.documents_status === 'approved';
 
       const stats = {
         pixToday: 0,
@@ -554,11 +550,11 @@ export class MerchantsService {
         successRate: 0,
         averageTicket: 0,
         chargebackRate: 0,
-        availableBalance: capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
-        pendingBalance: !capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
+        availableBalance: canWithdraw ? (merchant?.balance || 0) : 0,
+        pendingBalance: !canWithdraw ? (merchant?.balance || 0) : 0,
         documentsStatus: merchant?.documents_status || 'pending',
         documentsSubmitted: merchant?.documents_submitted || false,
-        canWithdraw: capabilities?.can_withdraw || false
+        canWithdraw
       };
 
       if (transactions?.length) {
@@ -567,7 +563,10 @@ export class MerchantsService {
         
         stats.successRate = (successful.length / transactions.length) * 100;
         stats.chargebackRate = (chargebacks.length / transactions.length) * 100;
-        stats.averageTicket = successful.reduce((sum, tx) => sum + tx.amount, 0) / successful.length;
+        
+        if (successful.length > 0) {
+          stats.averageTicket = successful.reduce((sum, tx) => sum + tx.amount, 0) / successful.length;
+        }
 
         transactions.forEach(tx => {
           if (tx.status === 'completed') {
