@@ -223,6 +223,7 @@ export class AdminService {
         const currentUser = (await supabase.auth.getUser()).data.user?.id;
         const now = new Date().toISOString();
 
+        // Atualizar status de todos os documentos para aprovado
         Object.keys(documentUrls).forEach(docId => {
           documentUrls[docId] = {
             ...documentUrls[docId],
@@ -232,13 +233,15 @@ export class AdminService {
           };
         });
 
+        // Atualizar dados do comerciante
         updateData.document_urls = documentUrls;
-        updateData.can_withdraw = true;
-        updateData.can_generate_api_key = true;
+        updateData.can_withdraw = true; // Garantir que pode sacar
+        updateData.can_generate_api_key = true; // Garantir que pode gerar chave API
         updateData.documents_verified = true;
         updateData.documents_verified_at = now;
         updateData.documents_verified_by = currentUser;
 
+        // Configurar taxa se fornecida
         if (data.fee_type) {
           updateData.fee_type = data.fee_type;
           if (data.fee_type === 'fixed') {
@@ -254,8 +257,12 @@ export class AdminService {
           }
         }
       } else {
+        // Se rejeitado, desabilitar funcionalidades
         updateData.can_withdraw = false;
         updateData.can_generate_api_key = false;
+        updateData.documents_verified = false;
+        updateData.documents_verified_at = null;
+        updateData.documents_verified_by = null;
       }
 
       const { data: updatedMerchant, error: updateError } = await supabase
