@@ -14,15 +14,28 @@ export class OnzWebhookController {
     try {
       logger.info('Recebido webhook da ONZ', {
         event: payload.event,
-        endToEndId: payload.data?.endToEndId
+        endToEndId: payload.data?.endToEndId,
+        txid: payload.data?.txid
       });
 
       // Processar notificação de PIX
       if (payload.event === 'pix.received') {
         const { endToEndId, txid, valor, horario, pagador } = payload.data;
 
+        // Buscar transação pelo transaction_id (txid)
+        const { data: transaction } = await this.transactionsService.getTransactionDetails(txid);
+
+        if (!transaction) {
+          logger.warn('Transação não encontrada', { txid });
+          return { 
+            status: 'error',
+            message: 'Transação não encontrada',
+            txid 
+          };
+        }
+
         // Atualizar status da transação
-        await this.transactionsService.updateTransactionStatus(txid, {
+        await this.transactionsService.updateTransactionStatus(transaction.id, {
           status: 'completed'
         });
 
@@ -32,10 +45,18 @@ export class OnzWebhookController {
           valor
         });
 
-        return { status: 'success' };
+        return { 
+          status: 'success',
+          message: 'PIX processado com sucesso',
+          txid 
+        };
       }
 
-      return { status: 'ignored', message: 'Evento não processado' };
+      return { 
+        status: 'ignored', 
+        message: 'Evento não processado',
+        event: payload.event 
+      };
     } catch (error) {
       logger.error('Erro ao processar webhook', {
         error,
