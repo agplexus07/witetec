@@ -48,6 +48,23 @@ export class MerchantsService {
         };
       }
 
+      // Verificar se o comerciante já existe
+      const { data: existingMerchant } = await supabase
+        .from('merchants')
+        .select('id, status')
+        .eq('id', user.id)
+        .single();
+
+      if (existingMerchant) {
+        return {
+          status: 'error',
+          code: 'MERCHANT_EXISTS',
+          message: 'Comerciante já registrado',
+          statusCode: 400,
+          details: `Status atual: ${existingMerchant.status}`
+        };
+      }
+
       // Obter sessão atual
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
@@ -219,7 +236,7 @@ export class MerchantsService {
         try {
           const { data, error } = await supabase
             .from('merchants')
-            .insert([{
+            .upsert([{
               id: user.id,
               company_name: merchantData.company_name,
               trading_name: merchantData.trading_name,
