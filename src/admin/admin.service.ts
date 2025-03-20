@@ -235,7 +235,7 @@ export class AdminService {
 
         // Atualizar dados do comerciante
         updateData.document_urls = documentUrls;
-        updateData.documents_status = 'approved'; // Adicionar atualização do documents_status
+        updateData.documents_status = 'approved';
         updateData.documents_verified = true;
         updateData.documents_verified_at = now;
         updateData.documents_verified_by = currentUser;
@@ -267,7 +267,7 @@ export class AdminService {
         });
 
         updateData.document_urls = documentUrls;
-        updateData.documents_status = 'rejected'; // Adicionar atualização do documents_status
+        updateData.documents_status = 'rejected';
         updateData.documents_verified = false;
         updateData.documents_verified_at = null;
         updateData.documents_verified_by = null;
