@@ -555,6 +555,7 @@ export class MerchantsService {
         averageTicket: 0,
         chargebackRate: 0,
         availableBalance: capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
+        pendingBalance: !capabilities?.can_withdraw ? (merchant?.balance || 0) : 0,
         documentsStatus: merchant?.documents_status || 'pending',
         documentsSubmitted: merchant?.documents_submitted || false,
         canWithdraw: capabilities?.can_withdraw || false
