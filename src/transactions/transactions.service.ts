@@ -295,7 +295,7 @@ export class TransactionsService {
     try {
       let dbQuery = supabase
         .from('transactions')
-        .select('id, created_at, customer_info, amount, status, expires_at, end_to_end_id, paid_at, payer_info')
+        .select('*')
         .eq('merchant_id', merchantId)
         .order('created_at', { ascending: false });
 
@@ -315,12 +315,26 @@ export class TransactionsService {
 
       if (error) throw error;
 
+      // Simplificar a resposta para o frontend
+      const simplifiedTransactions = data?.map(tx => ({
+        id: tx.id,
+        transaction_id: tx.transaction_id,
+        amount: tx.amount,
+        status: tx.status,
+        created_at: tx.created_at,
+        paid_at: tx.paid_at,
+        expires_at: tx.expires_at,
+        description: tx.description,
+        customer_name: tx.customer_info?.name || '',
+        customer_document: tx.customer_info?.document || ''
+      })) || [];
+
       logger.info('Transactions retrieved', {
         merchantId,
-        count: data?.length
+        count: simplifiedTransactions.length
       });
 
-      return data;
+      return simplifiedTransactions;
     } catch (error) {
       logger.error('Error retrieving transactions', {
         error,
