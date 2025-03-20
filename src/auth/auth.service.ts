@@ -10,9 +10,14 @@ export class AuthService {
 
   async login(email: string, password: string) {
     try {
+      logger.info('Iniciando login', { email });
+
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
+        options: {
+          // Remove expiresIn option to use default no expiration
+        }
       });
 
       if (authError) throw new UnauthorizedException(authError.message);
@@ -105,6 +110,9 @@ export class AuthService {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
+        options: {
+          // Remove expiresIn option to use default no expiration
+        }
       });
 
       if (authError) {
