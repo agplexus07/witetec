@@ -21,6 +21,65 @@ export class TransactionsService {
     private readonly webhookSenderService: WebhookSenderService
   ) {}
 
+  async getMerchantTransactions(merchantId: string, query: TransactionListQueryDto) {
+    try {
+      let dbQuery = supabase
+        .from('transactions')
+        .select('*')
+        .eq('merchant_id', merchantId)
+        .order('created_at', { ascending: false });
+
+      if (query.start_date) {
+        dbQuery = dbQuery.gte('created_at', query.start_date);
+      }
+
+      if (query.end_date) {
+        dbQuery = dbQuery.lte('created_at', query.end_date);
+      }
+
+      if (query.status) {
+        dbQuery = dbQuery.eq('status', query.status);
+      }
+
+      const { data, error } = await dbQuery;
+
+      if (error) throw error;
+
+      // Transform the data into a simple array format
+      const transactions = data?.map(tx => ({
+        id: tx.id,
+        transaction_id: tx.transaction_id,
+        amount: tx.amount,
+        status: tx.status,
+        created_at: tx.created_at,
+        paid_at: tx.paid_at,
+        expires_at: tx.expires_at,
+        description: tx.description,
+        customer_name: tx.customer_info?.name || '',
+        customer_document: tx.customer_info?.document || '',
+        fee_amount: tx.fee_amount,
+        net_amount: tx.net_amount
+      })) || [];
+
+      logger.info('Transactions retrieved', {
+        merchantId,
+        count: transactions.length
+      });
+
+      // Return array of transactions
+      return {
+        transactions: transactions,
+        total: transactions.length
+      };
+    } catch (error) {
+      logger.error('Error retrieving transactions', {
+        error,
+        merchantId
+      });
+      throw error;
+    }
+  }
+
   async createPixTransaction(data: CreatePixDto, merchantId: string) {
     try {
       logger.info('Starting PIX transaction creation', {
@@ -97,7 +156,6 @@ export class TransactionsService {
         expiresAt
       });
 
-      // Notificar o comerciante sobre a nova transação
       await this.webhookSenderService.sendWebhookNotification(
         merchantId,
         'payment.created',
@@ -161,7 +219,6 @@ export class TransactionsService {
           status: pixStatus.status
         });
 
-        // Notificar mudança de status
         if (pixStatus.status === 'completed') {
           await this.webhookSenderService.sendWebhookNotification(
             transaction.merchant_id,
@@ -286,59 +343,6 @@ export class TransactionsService {
         error,
         transactionId: id,
         status: data.status
-      });
-      throw error;
-    }
-  }
-
-  async getMerchantTransactions(merchantId: string, query: TransactionListQueryDto) {
-    try {
-      let dbQuery = supabase
-        .from('transactions')
-        .select('*')
-        .eq('merchant_id', merchantId)
-        .order('created_at', { ascending: false });
-
-      if (query.start_date) {
-        dbQuery = dbQuery.gte('created_at', query.start_date);
-      }
-
-      if (query.end_date) {
-        dbQuery = dbQuery.lte('created_at', query.end_date);
-      }
-
-      if (query.status) {
-        dbQuery = dbQuery.eq('status', query.status);
-      }
-
-      const { data, error } = await dbQuery;
-
-      if (error) throw error;
-
-      // Simplificar a resposta para o frontend
-      const simplifiedTransactions = data?.map(tx => ({
-        id: tx.id,
-        transaction_id: tx.transaction_id,
-        amount: tx.amount,
-        status: tx.status,
-        created_at: tx.created_at,
-        paid_at: tx.paid_at,
-        expires_at: tx.expires_at,
-        description: tx.description,
-        customer_name: tx.customer_info?.name || '',
-        customer_document: tx.customer_info?.document || ''
-      })) || [];
-
-      logger.info('Transactions retrieved', {
-        merchantId,
-        count: simplifiedTransactions.length
-      });
-
-      return simplifiedTransactions;
-    } catch (error) {
-      logger.error('Error retrieving transactions', {
-        error,
-        merchantId
       });
       throw error;
     }
