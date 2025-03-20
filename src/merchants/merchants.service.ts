@@ -7,7 +7,36 @@ import { Request } from 'express';
 @Injectable()
 export class MerchantsService {
   private readonly MAX_RETRIES = 3;
-  private readonly RETRY_DELAY = 2000; // 2 segundos
+  private readonly RETRY_DELAY = 2000;
+
+  async validateMerchantStatus(merchantId: string): Promise<{
+    canWithdraw: boolean;
+    canGenerateApiKey: boolean;
+    documentsApproved: boolean;
+    status: string;
+  }> {
+    const { data: merchant, error } = await supabase
+      .from('merchants')
+      .select('status, document_urls, can_withdraw, can_generate_api_key')
+      .eq('id', merchantId)
+      .single();
+
+    if (error || !merchant) {
+      throw new NotFoundException('Comerciante não encontrado');
+    }
+
+    const documentUrls = merchant.document_urls as Record<string, any> || {};
+    const documentsApproved = Object.values(documentUrls).every(
+      doc => doc.status === 'approved'
+    );
+
+    return {
+      canWithdraw: merchant.can_withdraw,
+      canGenerateApiKey: merchant.can_generate_api_key,
+      documentsApproved,
+      status: merchant.status
+    };
+  }
 
   async register(merchantData: CreateMerchantDto, req: Request) {
     try {
@@ -16,7 +45,6 @@ export class MerchantsService {
         cnpj: merchantData.cnpj
       });
 
-      // Validar dados obrigatórios
       const requiredFields = [
         'company_name',
         'cnpj',
@@ -35,7 +63,6 @@ export class MerchantsService {
         };
       }
 
-      // Obter usuário atual
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError || !user) {
@@ -48,7 +75,6 @@ export class MerchantsService {
         };
       }
 
-      // Verificar se o comerciante já existe
       const { data: existingMerchant } = await supabase
         .from('merchants')
         .select('id, status')
@@ -65,7 +91,6 @@ export class MerchantsService {
         };
       }
 
-      // Obter sessão atual
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
       if (sessionError || !session) {
@@ -78,7 +103,6 @@ export class MerchantsService {
         };
       }
 
-      // Preparar documentos para upload
       const documentUrls = {};
       for (const [docType, base64Data] of Object.entries(merchantData.documents)) {
         try {
@@ -92,7 +116,6 @@ export class MerchantsService {
             };
           }
 
-          // Verificar se o base64 está no formato correto
           if (!base64Data.startsWith('data:')) {
             return {
               status: 'error',
@@ -103,7 +126,6 @@ export class MerchantsService {
             };
           }
 
-          // Extrair o tipo MIME e os dados do base64
           const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
           
           if (!matches || matches.length !== 3) {
@@ -119,7 +141,6 @@ export class MerchantsService {
           const mimeType = matches[1];
           const base64File = matches[2];
           
-          // Validar tipo MIME
           const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
           if (!allowedMimes.includes(mimeType)) {
             return {
@@ -133,8 +154,7 @@ export class MerchantsService {
 
           const buffer = Buffer.from(base64File, 'base64');
           
-          // Validar tamanho (5MB)
-          const maxSize = 5 * 1024 * 1024; // 5MB em bytes
+          const maxSize = 5 * 1024 * 1024;
           if (buffer.length > maxSize) {
             return {
               status: 'error',
@@ -145,7 +165,6 @@ export class MerchantsService {
             };
           }
 
-          // Determinar a extensão do arquivo
           let extension;
           switch (mimeType) {
             case 'application/pdf':
@@ -169,7 +188,6 @@ export class MerchantsService {
 
           const filename = `${user.id}/${docType}.${extension}`;
 
-          // Upload do arquivo com retentativas
           let uploadSuccess = false;
           for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
             try {
@@ -182,7 +200,6 @@ export class MerchantsService {
 
               if (uploadError) throw uploadError;
 
-              // Gerar URL pública do documento
               const { data: urlData } = supabase.storage
                 .from('merchant-documents')
                 .getPublicUrl(filename);
@@ -230,7 +247,6 @@ export class MerchantsService {
         }
       }
 
-      // Criar o comerciante com retentativas
       let merchant;
       for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
         try {
@@ -308,7 +324,6 @@ export class MerchantsService {
         companyName: merchant.company_name
       });
 
-      // Retornar resposta no formato esperado
       return {
         status: 'success',
         data: {
@@ -407,7 +422,6 @@ export class MerchantsService {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      // Buscar transações
       const { data: transactions, error: txError } = await supabase
         .from('transactions')
         .select('*')
@@ -416,7 +430,6 @@ export class MerchantsService {
 
       if (txError) throw txError;
 
-      // Buscar saldo do merchant
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
         .select('balance, can_withdraw')
@@ -440,16 +453,13 @@ export class MerchantsService {
         const successful = transactions.filter(tx => tx.status === 'completed');
         const chargebacks = transactions.filter(tx => tx.status === 'chargeback');
         
-        // Calcular taxas
         stats.successRate = (successful.length / transactions.length) * 100;
         stats.chargebackRate = (chargebacks.length / transactions.length) * 100;
         
-        // Calcular ticket médio (apenas transações completadas)
         if (successful.length > 0) {
           stats.averageTicket = successful.reduce((sum, tx) => sum + tx.amount, 0) / successful.length;
         }
 
-        // Calcular volumes PIX
         transactions.forEach(tx => {
           if (tx.status === 'completed') {
             const txDate = new Date(tx.created_at);

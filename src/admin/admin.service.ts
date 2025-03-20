@@ -55,7 +55,6 @@ export class AdminService {
         }
       });
 
-      // Calcular taxa de chargeback
       metrics.chargeback_rate = (metrics.total_chargebacks / metrics.total_transactions) * 100;
     }
 
@@ -94,7 +93,6 @@ export class AdminService {
       merchantRevenue.set(merchantId, current);
     });
 
-    // Calcular ticket médio
     for (const revenue of merchantRevenue.values()) {
       revenue.average_ticket = revenue.total_volume / revenue.total_transactions;
     }
@@ -123,7 +121,6 @@ export class AdminService {
       throw new NotFoundException('Comerciante não encontrado');
     }
 
-    // Buscar estatísticas
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -206,7 +203,6 @@ export class AdminService {
 
   async updateMerchantStatus(merchantId: string, data: UpdateMerchantStatusDto) {
     try {
-      // Buscar o comerciante primeiro
       const { data: merchant, error: fetchError } = await supabase
         .from('merchants')
         .select('document_urls, status')
@@ -222,13 +218,11 @@ export class AdminService {
         ...(data.rejection_reason && { rejection_reason: data.rejection_reason }),
       };
 
-      // Se estiver aprovando o comerciante, aprovar todos os documentos automaticamente
       if (data.status === 'approved') {
         const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
         const currentUser = (await supabase.auth.getUser()).data.user?.id;
         const now = new Date().toISOString();
 
-        // Atualizar status de todos os documentos
         Object.keys(documentUrls).forEach(docId => {
           documentUrls[docId] = {
             ...documentUrls[docId],
@@ -239,11 +233,12 @@ export class AdminService {
         });
 
         updateData.document_urls = documentUrls;
+        updateData.can_withdraw = true;
+        updateData.can_generate_api_key = true;
         updateData.documents_verified = true;
         updateData.documents_verified_at = now;
         updateData.documents_verified_by = currentUser;
 
-        // Atualizar configuração de taxa
         if (data.fee_type) {
           updateData.fee_type = data.fee_type;
           if (data.fee_type === 'fixed') {
@@ -258,6 +253,9 @@ export class AdminService {
             }
           }
         }
+      } else {
+        updateData.can_withdraw = false;
+        updateData.can_generate_api_key = false;
       }
 
       const { data: updatedMerchant, error: updateError } = await supabase
@@ -273,9 +271,8 @@ export class AdminService {
         merchantId,
         status: data.status,
         documentsApproved: data.status === 'approved',
-        feeType: data.fee_type,
-        feeAmount: data.fee_amount,
-        feePercentage: data.fee_percentage
+        canWithdraw: updateData.can_withdraw,
+        canGenerateApiKey: updateData.can_generate_api_key
       });
 
       return updatedMerchant;
@@ -291,7 +288,6 @@ export class AdminService {
 
   async updateDocumentStatus(merchantId: string, documentId: string, data: UpdateDocumentStatusDto) {
     try {
-      // Buscar o comerciante
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
         .select('document_urls, status')
@@ -302,7 +298,6 @@ export class AdminService {
         throw new NotFoundException('Comerciante não encontrado');
       }
 
-      // Atualizar o status do documento no document_urls
       const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
       documentUrls[documentId] = {
         ...documentUrls[documentId],
@@ -312,14 +307,17 @@ export class AdminService {
         rejection_reason: data.rejection_reason
       };
 
-      // Atualizar o comerciante
+      const allApproved = Object.values(documentUrls).every(doc => doc.status === 'approved');
+
       const { data: updatedMerchant, error: updateError } = await supabase
         .from('merchants')
         .update({
           document_urls: documentUrls,
-          documents_verified: Object.values(documentUrls).every(doc => doc.status === 'approved'),
-          documents_verified_at: new Date().toISOString(),
-          documents_verified_by: (await supabase.auth.getUser()).data.user?.id
+          can_withdraw: allApproved && merchant.status === 'approved',
+          can_generate_api_key: allApproved && merchant.status === 'approved',
+          documents_verified: allApproved,
+          documents_verified_at: allApproved ? new Date().toISOString() : null,
+          documents_verified_by: allApproved ? (await supabase.auth.getUser()).data.user?.id : null
         })
         .eq('id', merchantId)
         .select()
@@ -330,7 +328,8 @@ export class AdminService {
       logger.info('Document status updated', {
         merchantId,
         documentId,
-        status: data.status
+        status: data.status,
+        allApproved
       });
 
       return updatedMerchant;
@@ -346,7 +345,6 @@ export class AdminService {
 
   async updateDocumentsStatus(merchantId: string, data: UpdateDocumentsStatusDto) {
     try {
-      // Buscar o comerciante
       const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
         .select('document_urls, status')
@@ -357,7 +355,6 @@ export class AdminService {
         throw new NotFoundException('Comerciante não encontrado');
       }
 
-      // Atualizar o status dos documentos selecionados
       const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
       const currentUser = (await supabase.auth.getUser()).data.user?.id;
       const now = new Date().toISOString();
@@ -372,14 +369,17 @@ export class AdminService {
         };
       });
 
-      // Atualizar o comerciante
+      const allApproved = Object.values(documentUrls).every(doc => doc.status === 'approved');
+
       const { data: updatedMerchant, error: updateError } = await supabase
         .from('merchants')
         .update({
           document_urls: documentUrls,
-          documents_verified: Object.values(documentUrls).every(doc => doc.status === 'approved'),
-          documents_verified_at: now,
-          documents_verified_by: currentUser
+          can_withdraw: allApproved && merchant.status === 'approved',
+          can_generate_api_key: allApproved && merchant.status === 'approved',
+          documents_verified: allApproved,
+          documents_verified_at: allApproved ? now : null,
+          documents_verified_by: allApproved ? currentUser : null
         })
         .eq('id', merchantId)
         .select()
@@ -390,7 +390,8 @@ export class AdminService {
       logger.info('Multiple documents status updated', {
         merchantId,
         documentIds: data.document_ids,
-        status: data.status
+        status: data.status,
+        allApproved
       });
 
       return updatedMerchant;
@@ -501,7 +502,6 @@ export class AdminService {
 
     if (error) throw error;
 
-    // Agrupar por comerciante
     const revenueByMerchant = data.reduce((acc: any, tx: any) => {
       const merchantId = tx.merchant_id;
       const merchant = tx.merchants;
@@ -523,7 +523,6 @@ export class AdminService {
       return acc;
     }, {});
 
-    // Calcular média de ticket
     Object.values(revenueByMerchant).forEach((stats: any) => {
       if (stats.transaction_count > 0) {
         stats.average_ticket = stats.total_volume / stats.transaction_count;
@@ -579,7 +578,6 @@ export class AdminService {
 
     if (updateError) throw updateError;
 
-    // Se aprovado, deduzir do saldo do comerciante
     if (data.status === 'approved') {
       const totalDeduction = withdrawal.amount + withdrawal.fee_amount;
       await this.updateMerchantBalance(withdrawal.merchant_id, -totalDeduction);
