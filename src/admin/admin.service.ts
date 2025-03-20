@@ -235,8 +235,7 @@ export class AdminService {
 
         // Atualizar dados do comerciante
         updateData.document_urls = documentUrls;
-        updateData.can_withdraw = true; // Garantir que pode sacar
-        updateData.can_generate_api_key = true; // Garantir que pode gerar chave API
+        updateData.documents_status = 'approved'; // Adicionar atualização do documents_status
         updateData.documents_verified = true;
         updateData.documents_verified_at = now;
         updateData.documents_verified_by = currentUser;
@@ -257,9 +256,18 @@ export class AdminService {
           }
         }
       } else {
-        // Se rejeitado, desabilitar funcionalidades
-        updateData.can_withdraw = false;
-        updateData.can_generate_api_key = false;
+        // Se rejeitado, atualizar status dos documentos
+        const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
+        Object.keys(documentUrls).forEach(docId => {
+          documentUrls[docId] = {
+            ...documentUrls[docId],
+            status: 'rejected',
+            rejection_reason: data.rejection_reason
+          };
+        });
+
+        updateData.document_urls = documentUrls;
+        updateData.documents_status = 'rejected'; // Adicionar atualização do documents_status
         updateData.documents_verified = false;
         updateData.documents_verified_at = null;
         updateData.documents_verified_by = null;
@@ -277,9 +285,8 @@ export class AdminService {
       logger.info('Merchant status updated', {
         merchantId,
         status: data.status,
-        documentsApproved: data.status === 'approved',
-        canWithdraw: updateData.can_withdraw,
-        canGenerateApiKey: updateData.can_generate_api_key
+        documentsStatus: updateData.documents_status,
+        documentsVerified: updateData.documents_verified
       });
 
       return updatedMerchant;
@@ -306,25 +313,28 @@ export class AdminService {
       }
 
       const documentUrls = merchant.document_urls as MerchantDocumentUrls || {};
+      const currentUser = (await supabase.auth.getUser()).data.user?.id;
+      const now = new Date().toISOString();
+
       documentUrls[documentId] = {
         ...documentUrls[documentId],
         status: data.status,
-        reviewed_at: new Date().toISOString(),
-        reviewed_by: (await supabase.auth.getUser()).data.user?.id,
+        reviewed_at: now,
+        reviewed_by: currentUser,
         rejection_reason: data.rejection_reason
       };
 
       const allApproved = Object.values(documentUrls).every(doc => doc.status === 'approved');
+      const anyRejected = Object.values(documentUrls).some(doc => doc.status === 'rejected');
 
       const { data: updatedMerchant, error: updateError } = await supabase
         .from('merchants')
         .update({
           document_urls: documentUrls,
-          can_withdraw: allApproved && merchant.status === 'approved',
-          can_generate_api_key: allApproved && merchant.status === 'approved',
+          documents_status: anyRejected ? 'rejected' : (allApproved ? 'approved' : 'pending'),
           documents_verified: allApproved,
-          documents_verified_at: allApproved ? new Date().toISOString() : null,
-          documents_verified_by: allApproved ? (await supabase.auth.getUser()).data.user?.id : null
+          documents_verified_at: allApproved ? now : null,
+          documents_verified_by: allApproved ? currentUser : null
         })
         .eq('id', merchantId)
         .select()
@@ -336,7 +346,8 @@ export class AdminService {
         merchantId,
         documentId,
         status: data.status,
-        allApproved
+        allApproved,
+        anyRejected
       });
 
       return updatedMerchant;
@@ -377,13 +388,13 @@ export class AdminService {
       });
 
       const allApproved = Object.values(documentUrls).every(doc => doc.status === 'approved');
+      const anyRejected = Object.values(documentUrls).some(doc => doc.status === 'rejected');
 
       const { data: updatedMerchant, error: updateError } = await supabase
         .from('merchants')
         .update({
           document_urls: documentUrls,
-          can_withdraw: allApproved && merchant.status === 'approved',
-          can_generate_api_key: allApproved && merchant.status === 'approved',
+          documents_status: anyRejected ? 'rejected' : (allApproved ? 'approved' : 'pending'),
           documents_verified: allApproved,
           documents_verified_at: allApproved ? now : null,
           documents_verified_by: allApproved ? currentUser : null
@@ -398,7 +409,8 @@ export class AdminService {
         merchantId,
         documentIds: data.document_ids,
         status: data.status,
-        allApproved
+        allApproved,
+        anyRejected
       });
 
       return updatedMerchant;
