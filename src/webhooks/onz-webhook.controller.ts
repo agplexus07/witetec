@@ -4,6 +4,8 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { logger } from '../config/logger.config';
 import { supabase } from '../config/supabase.config';
 import { onzClient } from '../config/onz.config';
+import * as fs from 'fs';
+import * as path from 'path';
 import axios from 'axios';
 import * as https from 'https';
 
@@ -37,24 +39,25 @@ export class OnzWebhookController {
         txid: pixDetails.txid
       });
 
-      // Salvar o txid temporariamente
-      const { error: txidUpdateError } = await supabase
-        .from('transactions')
-        .update({
-          txid: pixDetails.txid,
-          end_to_end_id: payload.endToEndId
-        })
-        .eq('end_to_end_id', payload.endToEndId);
+      // Configuração do certificado PFX
+      const PFX_PATH = path.join(process.cwd(), 'src/certs/ECOMOVI_27.pfx');
+      const PFX_PASSWORD = 'onzsoftware';
 
-      if (txidUpdateError) {
-        logger.error('Erro ao salvar txid na transação', {
-          error: txidUpdateError,
-          txid: pixDetails.txid,
-          endToEndId: payload.endToEndId
-        });
+      // Verificar se o arquivo PFX existe
+      if (!fs.existsSync(PFX_PATH)) {
+        throw new Error('Certificado PFX não encontrado');
       }
 
-      // Consultar detalhes da cobrança na API da Ecomovi
+      const pfxBuffer = fs.readFileSync(PFX_PATH);
+      
+      // Criar agente HTTPS com o certificado
+      const httpsAgent = new https.Agent({
+        pfx: pfxBuffer,
+        passphrase: PFX_PASSWORD,
+        rejectUnauthorized: false
+      });
+
+      // Obter token de acesso
       const accessToken = await onzClient.getAccessToken();
       
       if (!accessToken) {
@@ -67,19 +70,13 @@ export class OnzWebhookController {
         url: ecomoviUrl
       });
 
-      // Criar instância do axios com configuração SSL
-      const axiosInstance = axios.create({
-        httpsAgent: new https.Agent({
-          rejectUnauthorized: false // Necessário para certificados auto-assinados
-        }),
-        timeout: 10000 // 10 segundos timeout
-      });
-
-      const ecomoviResponse = await axiosInstance.get(ecomoviUrl, {
+      // Fazer requisição com o certificado configurado
+      const ecomoviResponse = await axios.get(ecomoviUrl, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
-        }
+        },
+        httpsAgent // Usar o agente HTTPS com o certificado
       });
 
       const cobDetails = ecomoviResponse.data;
