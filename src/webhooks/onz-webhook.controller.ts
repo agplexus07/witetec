@@ -32,15 +32,32 @@ export class OnzWebhookController {
           pagador: pixDetails.pagador
         });
 
-        // Buscar a transação pelo transaction_id
+        // Buscar o correlationID (nosso transaction_id) das informações adicionais
+        const correlationID = pixDetails.infoAdicionais?.find(
+          info => info.nome === 'correlationID'
+        )?.valor;
+
+        if (!correlationID) {
+          logger.error('CorrelationID não encontrado', {
+            txid: pixDetails.txid,
+            endToEndId: pixDetails.endToEndId
+          });
+          return {
+            status: 'error',
+            message: 'CorrelationID não encontrado'
+          };
+        }
+
+        // Buscar a transação pelo transaction_id (correlationID)
         const { data: transaction, error } = await supabase
           .from('transactions')
           .select('*')
-          .eq('transaction_id', pixDetails.txid)
+          .eq('transaction_id', correlationID)
           .maybeSingle();
 
         if (!transaction) {
           logger.error('Transação não encontrada', {
+            correlationID,
             txid: pixDetails.txid,
             endToEndId: pixDetails.endToEndId
           });
@@ -48,8 +65,7 @@ export class OnzWebhookController {
           return { 
             status: 'error',
             message: 'Transação não encontrada',
-            txid: pixDetails.txid,
-            endToEndId: pixDetails.endToEndId
+            correlationID
           };
         }
 
@@ -62,6 +78,7 @@ export class OnzWebhookController {
         await supabase
           .from('transactions')
           .update({
+            txid: pixDetails.txid,
             end_to_end_id: pixDetails.endToEndId,
             paid_at: pixDetails.horario,
             payer_info: pixDetails.pagador
@@ -69,6 +86,7 @@ export class OnzWebhookController {
           .eq('id', transaction.id);
 
         logger.info('PIX processado com sucesso', {
+          correlationID,
           txid: pixDetails.txid,
           endToEndId: pixDetails.endToEndId,
           valor: pixDetails.valor,
@@ -78,7 +96,7 @@ export class OnzWebhookController {
         return { 
           status: 'success',
           message: 'PIX processado com sucesso',
-          txid: pixDetails.txid,
+          correlationID,
           transactionId: transaction.id
         };
       }
