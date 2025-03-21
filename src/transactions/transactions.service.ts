@@ -45,7 +45,6 @@ export class TransactionsService {
 
       if (error) throw error;
 
-      // Transform the data into a simple array format
       const transactions = data?.map(tx => ({
         id: tx.id,
         transaction_id: tx.transaction_id,
@@ -66,7 +65,6 @@ export class TransactionsService {
         count: transactions.length
       });
 
-      // Return array of transactions
       return {
         transactions: transactions,
         total: transactions.length
@@ -288,6 +286,29 @@ export class TransactionsService {
         throw new BadRequestException('Transação expirada não pode ser atualizada');
       }
 
+      // Primeiro atualizamos o saldo do comerciante se a transação for completada
+      if (data.status === 'completed' && currentTransaction.status !== 'completed') {
+        logger.info('Atualizando saldo do comerciante', {
+          merchantId: currentTransaction.merchant_id,
+          amount: currentTransaction.net_amount
+        });
+
+        const { error: balanceError } = await supabase.rpc('update_merchant_balance', {
+          p_merchant_id: currentTransaction.merchant_id,
+          p_amount: currentTransaction.net_amount
+        });
+
+        if (balanceError) {
+          logger.error('Erro ao atualizar saldo do comerciante', {
+            error: balanceError,
+            merchantId: currentTransaction.merchant_id,
+            amount: currentTransaction.net_amount
+          });
+          throw balanceError;
+        }
+      }
+
+      // Depois atualizamos o status da transação
       const { data: transaction, error } = await supabase
         .from('transactions')
         .update({ 
@@ -302,8 +323,6 @@ export class TransactionsService {
       if (error) throw error;
 
       if (data.status === 'completed' && currentTransaction.status !== 'completed') {
-        await this.updateMerchantBalance(transaction.merchant_id, transaction.net_amount);
-        
         await this.webhookSenderService.sendWebhookNotification(
           transaction.merchant_id,
           'payment.success',
@@ -316,9 +335,10 @@ export class TransactionsService {
           }
         );
 
-        logger.info('Transaction completed and webhook sent', {
+        logger.info('Transação completada e saldo atualizado', {
           transactionId: id,
-          merchantId: transaction.merchant_id
+          merchantId: transaction.merchant_id,
+          amount: transaction.net_amount
         });
       } else if (data.status === 'failed' && currentTransaction.status !== 'failed') {
         await this.webhookSenderService.sendWebhookNotification(
@@ -331,7 +351,7 @@ export class TransactionsService {
           }
         );
 
-        logger.info('Transaction failed and webhook sent', {
+        logger.info('Transação falhou', {
           transactionId: id,
           merchantId: transaction.merchant_id
         });
