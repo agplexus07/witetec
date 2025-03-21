@@ -40,7 +40,8 @@ export class WithdrawalsService {
         throw new BadRequestException(`Saldo insuficiente. Necessário: R$ ${totalAmount.toFixed(2)} (valor + taxa de R$ ${this.WITHDRAWAL_FEE})`);
       }
 
-      const { data: withdrawal, error } = await supabase
+      // Primeiro criar o registro de saque
+      const { data: withdrawal, error: withdrawalError } = await supabase
         .from('withdrawals')
         .insert([
           {
@@ -56,13 +57,34 @@ export class WithdrawalsService {
         .select()
         .single();
 
-      if (error) {
+      if (withdrawalError) {
         logger.error('Erro ao criar saque', {
-          error,
+          error: withdrawalError,
           merchantId,
           amount: data.amount
         });
-        throw error;
+        throw withdrawalError;
+      }
+
+      // Deduzir o valor do saldo do comerciante imediatamente
+      const { error: balanceError } = await supabase.rpc('update_merchant_balance', {
+        p_merchant_id: merchantId,
+        p_amount: -totalAmount // Deduz o valor total (saque + taxa)
+      });
+
+      if (balanceError) {
+        // Se houver erro ao atualizar o saldo, reverter a criação do saque
+        await supabase
+          .from('withdrawals')
+          .delete()
+          .eq('id', withdrawal.id);
+
+        logger.error('Erro ao atualizar saldo do comerciante', {
+          error: balanceError,
+          merchantId,
+          amount: totalAmount
+        });
+        throw new BadRequestException('Erro ao processar saque. Tente novamente.');
       }
 
       logger.info('Solicitação de saque criada com sucesso', {
@@ -111,10 +133,10 @@ export class WithdrawalsService {
 
       if (updateError) throw updateError;
 
-      // Se aprovado, deduzir do saldo do comerciante
-      if (data.status === 'approved') {
-        const totalDeduction = withdrawal.amount + withdrawal.fee_amount;
-        await this.updateMerchantBalance(withdrawal.merchant_id, -totalDeduction);
+      // Se o saque for rejeitado, devolver o valor ao saldo do comerciante
+      if (data.status === 'rejected') {
+        const totalAmount = withdrawal.amount + withdrawal.fee_amount;
+        await this.updateMerchantBalance(withdrawal.merchant_id, totalAmount);
       }
 
       logger.info('Status do saque atualizado', {
