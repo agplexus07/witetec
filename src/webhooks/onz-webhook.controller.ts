@@ -32,37 +32,25 @@ export class OnzWebhookController {
           pagador: pixDetails.pagador
         });
 
-        // Primeiro tentar buscar pelo txid
-        let { data: transaction, error } = await supabase
+        // Buscar a transação pelo transaction_id
+        const { data: transaction, error } = await supabase
           .from('transactions')
           .select('*')
           .eq('transaction_id', pixDetails.txid)
           .maybeSingle();
 
-        // Se não encontrou pelo txid, tentar pelo ID diretamente
         if (!transaction) {
-          const { data: transactionById, error: errorById } = await supabase
-            .from('transactions')
-            .select('*')
-            .eq('id', pixDetails.txid)
-            .single();
+          logger.error('Transação não encontrada', {
+            txid: pixDetails.txid,
+            endToEndId: pixDetails.endToEndId
+          });
 
-          if (errorById || !transactionById) {
-            logger.error('Transação não encontrada em nenhuma busca', {
-              txid: pixDetails.txid,
-              endToEndId: pixDetails.endToEndId,
-              error: errorById?.message
-            });
-
-            return { 
-              status: 'error',
-              message: 'Transação não encontrada',
-              txid: pixDetails.txid,
-              endToEndId: pixDetails.endToEndId
-            };
-          }
-
-          transaction = transactionById;
+          return { 
+            status: 'error',
+            message: 'Transação não encontrada',
+            txid: pixDetails.txid,
+            endToEndId: pixDetails.endToEndId
+          };
         }
 
         // Atualizar a transação com os dados do pagamento
