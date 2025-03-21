@@ -19,7 +19,7 @@ export class OnzWebhookController {
         endToEndId: payload.endToEndId
       });
 
-      // Se recebemos um endToEndId, vamos consultar os detalhes do PIX
+      // Se recebemos um endToEndId, vamos processar o pagamento
       if (payload.endToEndId) {
         // Primeiro consultar os detalhes do PIX para obter o txid
         const pixDetails = await onzClient.pix.get(payload.endToEndId);
@@ -29,23 +29,80 @@ export class OnzWebhookController {
           txid: pixDetails.txid
         });
 
-        // Agora consultar a cobrança usando o txid
-        const cobDetails = await onzClient.pix.status(pixDetails.txid);
+        // Salvar o txid no banco temporariamente para referência
+        // (Isso pode ser ajustado conforme sua estrutura de dados)
+        const { data: updatedWithTxid, error: txidUpdateError } = await supabase
+          .from('transactions')
+          .update({
+            txid: pixDetails.txid
+          })
+          .eq('end_to_end_id', payload.endToEndId)
+          .select();
 
-        logger.info('Detalhes da cobrança recebidos', {
+        if (txidUpdateError) {
+          logger.error('Erro ao salvar txid na transação', {
+            error: txidUpdateError,
+            txid: pixDetails.txid,
+            endToEndId: payload.endToEndId
+          });
+        }
+
+        // Consultar detalhes da cobrança usando a API da Ecomovi
+        const ecomoviUrl = `https://api.pix.ecomovi.com.br/cob/${pixDetails.txid}`;
+        
+        logger.info('Consultando API da Ecomovi', {
+          url: ecomoviUrl
+        });
+        
+        const ecomoviResponse = await fetch(ecomoviUrl);
+        
+        if (!ecomoviResponse.ok) {
+          logger.error('Erro ao consultar API da Ecomovi', {
+            status: ecomoviResponse.status,
+            statusText: ecomoviResponse.statusText,
+            txid: pixDetails.txid
+          });
+          
+          return {
+            status: 'error',
+            message: 'Erro ao consultar API da Ecomovi',
+            statusCode: ecomoviResponse.status
+          };
+        }
+        
+        const cobDetails = await ecomoviResponse.json();
+
+        logger.info('Detalhes da cobrança recebidos da Ecomovi', {
           txid: pixDetails.txid,
-          status: cobDetails.status
+          correlationId: cobDetails.infoAdicionais?.find(info => info.nome === 'correlationID')?.valor
         });
 
-        // Buscar o transaction_id das informações da transação
+        // Obter o correlationID (transaction_id) das informações adicionais
+        const correlationId = cobDetails.infoAdicionais?.find(
+          info => info.nome === 'correlationID'
+        )?.valor;
+
+        if (!correlationId) {
+          logger.error('correlationID não encontrado na cobrança', {
+            txid: pixDetails.txid,
+            endToEndId: pixDetails.endToEndId
+          });
+          return {
+            status: 'error',
+            message: 'correlationID não encontrado na cobrança'
+          };
+        }
+
+        // Buscar a transação pelo transaction_id (correlationID)
         const { data: transaction, error } = await supabase
           .from('transactions')
           .select('*')
-          .eq('txid', pixDetails.txid)
+          .eq('transaction_id', correlationId)
           .maybeSingle();
 
         if (!transaction) {
           logger.error('Transação não encontrada', {
+            correlationId,
             txid: pixDetails.txid,
             endToEndId: pixDetails.endToEndId
           });
@@ -53,7 +110,7 @@ export class OnzWebhookController {
           return { 
             status: 'error',
             message: 'Transação não encontrada',
-            txid: pixDetails.txid
+            correlationId
           };
         }
 
@@ -62,26 +119,33 @@ export class OnzWebhookController {
           status: 'completed'
         });
 
+        // Extrair informações do pagador do objeto cobDetails
+        const pagador = cobDetails.pix?.[0]?.pagador || pixDetails.pagador;
+        const horario = cobDetails.pix?.[0]?.horario || pixDetails.horario;
+
         // Atualizar informações adicionais da transação
         await supabase
           .from('transactions')
           .update({
             end_to_end_id: pixDetails.endToEndId,
-            paid_at: pixDetails.horario,
-            payer_info: pixDetails.pagador
+            txid: pixDetails.txid,
+            paid_at: horario,
+            payer_info: pagador
           })
           .eq('id', transaction.id);
 
         logger.info('PIX processado com sucesso', {
+          correlationId,
           txid: pixDetails.txid,
           endToEndId: pixDetails.endToEndId,
-          valor: pixDetails.valor,
+          valor: cobDetails.valor?.original || pixDetails.valor,
           transactionId: transaction.id
         });
 
         return { 
           status: 'success',
           message: 'PIX processado com sucesso',
+          correlationId,
           transactionId: transaction.id
         };
       }
@@ -93,10 +157,16 @@ export class OnzWebhookController {
       };
     } catch (error) {
       logger.error('Erro ao processar webhook', {
-        error,
+        error: error.message,
+        stack: error.stack,
         payload
       });
-      throw error;
+      
+      return {
+        status: 'error',
+        message: 'Erro ao processar webhook',
+        error: error.message
+      };
     }
   }
 }
