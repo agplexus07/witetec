@@ -25,6 +25,9 @@ export class CreateWithdrawalDto {
   })
   @IsString()
   pix_key: string;
+
+  // Removendo o user_id pois ele não deve vir do frontend
+  // O merchantId já é passado na URL
 }
 
 export class UpdateWithdrawalStatusDto {
