@@ -4,6 +4,8 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { logger } from '../config/logger.config';
 import { supabase } from '../config/supabase.config';
 import { onzClient } from '../config/onz.config';
+import axios from 'axios';
+import * as https from 'https';
 
 @ApiTags('webhooks')
 @Controller('webhooks/onz/pix')
@@ -65,20 +67,22 @@ export class OnzWebhookController {
         url: ecomoviUrl
       });
 
-      const ecomoviResponse = await fetch(ecomoviUrl, {
-        method: 'GET',
+      // Criar instância do axios com configuração SSL
+      const axiosInstance = axios.create({
+        httpsAgent: new https.Agent({
+          rejectUnauthorized: false // Necessário para certificados auto-assinados
+        }),
+        timeout: 10000 // 10 segundos timeout
+      });
+
+      const ecomoviResponse = await axiosInstance.get(ecomoviUrl, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
-        },
-        signal: AbortSignal.timeout(10000)
+        }
       });
 
-      if (!ecomoviResponse.ok) {
-        throw new Error(`Status: ${ecomoviResponse.status} - ${ecomoviResponse.statusText}`);
-      }
-
-      const cobDetails = await ecomoviResponse.json();
+      const cobDetails = ecomoviResponse.data;
 
       logger.info('Detalhes da cobrança recebidos da Ecomovi', {
         txid: pixDetails.txid,
@@ -174,7 +178,8 @@ export class OnzWebhookController {
       logger.error('Erro ao processar webhook', {
         error: {
           message: error.message,
-          stack: error.stack
+          stack: error.stack,
+          response: error.response?.data
         },
         payload
       });
