@@ -278,21 +278,32 @@ export class TransactionsService {
         throw new NotFoundException('Transação não encontrada');
       }
 
-      if (['completed', 'failed'].includes(currentTransaction.status)) {
+      if (['completed', 'failed', 'expired'].includes(currentTransaction.status)) {
         throw new BadRequestException('Transação já está em estado final');
       }
 
-      if (currentTransaction.status === 'expired' && data.status !== 'completed') {
-        throw new BadRequestException('Transação expirada não pode ser atualizada');
-      }
+      // Primeiro atualizamos o status da transação
+      const { data: transaction, error: updateError } = await supabase
+        .from('transactions')
+        .update({ 
+          status: data.status,
+          updated_at: new Date().toISOString(),
+          paid_at: data.status === 'completed' ? new Date().toISOString() : null
+        })
+        .eq('id', id)
+        .select()
+        .single();
 
-      // Primeiro atualizamos o saldo do comerciante se a transação for completada
+      if (updateError) throw updateError;
+
+      // Se a transação foi completada, atualizamos o saldo do comerciante
       if (data.status === 'completed' && currentTransaction.status !== 'completed') {
         logger.info('Atualizando saldo do comerciante', {
           merchantId: currentTransaction.merchant_id,
           amount: currentTransaction.net_amount
         });
 
+        // Usar RPC para atualizar o saldo de forma atômica
         const { error: balanceError } = await supabase.rpc('update_merchant_balance', {
           p_merchant_id: currentTransaction.merchant_id,
           p_amount: currentTransaction.net_amount
@@ -306,23 +317,8 @@ export class TransactionsService {
           });
           throw balanceError;
         }
-      }
 
-      // Depois atualizamos o status da transação
-      const { data: transaction, error } = await supabase
-        .from('transactions')
-        .update({ 
-          status: data.status,
-          updated_at: new Date().toISOString(),
-          paid_at: data.status === 'completed' ? new Date().toISOString() : null
-        })
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      if (data.status === 'completed' && currentTransaction.status !== 'completed') {
+        // Enviar webhook de sucesso
         await this.webhookSenderService.sendWebhookNotification(
           transaction.merchant_id,
           'payment.success',
@@ -400,14 +396,5 @@ export class TransactionsService {
       });
       throw error;
     }
-  }
-
-  private async updateMerchantBalance(merchantId: string, amount: number) {
-    const { error } = await supabase.rpc('update_merchant_balance', {
-      p_merchant_id: merchantId,
-      p_amount: amount,
-    });
-
-    if (error) throw error;
   }
 }
