@@ -32,23 +32,37 @@ export class OnzWebhookController {
           pagador: pixDetails.pagador
         });
 
-        // Buscar transação pelo txid
-        const { data: transaction, error } = await supabase
+        // Primeiro tentar buscar pelo txid
+        let { data: transaction, error } = await supabase
           .from('transactions')
           .select('*')
           .eq('transaction_id', pixDetails.txid)
-          .single();
+          .maybeSingle();
 
-        if (error || !transaction) {
-          logger.warn('Transação não encontrada pelo txid', { 
-            txid: pixDetails.txid,
-            error: error?.message 
-          });
-          return { 
-            status: 'error',
-            message: 'Transação não encontrada',
-            txid: pixDetails.txid
-          };
+        // Se não encontrou pelo txid, tentar pelo ID diretamente
+        if (!transaction) {
+          const { data: transactionById, error: errorById } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('id', pixDetails.txid)
+            .single();
+
+          if (errorById || !transactionById) {
+            logger.error('Transação não encontrada em nenhuma busca', {
+              txid: pixDetails.txid,
+              endToEndId: pixDetails.endToEndId,
+              error: errorById?.message
+            });
+
+            return { 
+              status: 'error',
+              message: 'Transação não encontrada',
+              txid: pixDetails.txid,
+              endToEndId: pixDetails.endToEndId
+            };
+          }
+
+          transaction = transactionById;
         }
 
         // Atualizar a transação com os dados do pagamento
@@ -69,13 +83,15 @@ export class OnzWebhookController {
         logger.info('PIX processado com sucesso', {
           txid: pixDetails.txid,
           endToEndId: pixDetails.endToEndId,
-          valor: pixDetails.valor
+          valor: pixDetails.valor,
+          transactionId: transaction.id
         });
 
         return { 
           status: 'success',
           message: 'PIX processado com sucesso',
-          txid: pixDetails.txid
+          txid: pixDetails.txid,
+          transactionId: transaction.id
         };
       }
 
