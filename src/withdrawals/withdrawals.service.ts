@@ -9,18 +9,28 @@ export class WithdrawalsService {
 
   async createWithdrawal(data: CreateWithdrawalDto, merchantId: string) {
     try {
-      // Verificar se o comerciante pode realizar saques
-      const { data: merchant } = await supabase
+      logger.info('Iniciando solicitação de saque', {
+        merchantId,
+        amount: data.amount
+      });
+
+      // Verificar se o comerciante existe e pode realizar saques
+      const { data: merchant, error: merchantError } = await supabase
         .from('merchants')
-        .select('balance, can_withdraw, documents_status')
+        .select('balance, status, documents_status')
         .eq('id', merchantId)
         .single();
 
-      if (!merchant) {
+      if (merchantError || !merchant) {
+        logger.error('Erro ao buscar comerciante', {
+          merchantId,
+          error: merchantError
+        });
         throw new BadRequestException('Comerciante não encontrado');
       }
 
-      if (!merchant.can_withdraw) {
+      // Verificar se o comerciante está aprovado e com documentos verificados
+      if (merchant.status !== 'approved' || merchant.documents_status !== 'approved') {
         throw new BadRequestException('Envie os documentos e aguarde a aprovação para realizar saques');
       }
 
@@ -46,9 +56,16 @@ export class WithdrawalsService {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        logger.error('Erro ao criar saque', {
+          error,
+          merchantId,
+          amount: data.amount
+        });
+        throw error;
+      }
 
-      logger.info('Withdrawal request created', {
+      logger.info('Solicitação de saque criada com sucesso', {
         withdrawalId: withdrawal.id,
         merchantId,
         amount: data.amount
@@ -56,7 +73,7 @@ export class WithdrawalsService {
 
       return withdrawal;
     } catch (error) {
-      logger.error('Error creating withdrawal', {
+      logger.error('Erro ao processar solicitação de saque', {
         error,
         merchantId,
         amount: data.amount
@@ -100,7 +117,7 @@ export class WithdrawalsService {
         await this.updateMerchantBalance(withdrawal.merchant_id, -totalDeduction);
       }
 
-      logger.info('Withdrawal status updated', {
+      logger.info('Status do saque atualizado', {
         withdrawalId: id,
         status: data.status,
         merchantId: withdrawal.merchant_id
@@ -108,7 +125,7 @@ export class WithdrawalsService {
 
       return updated;
     } catch (error) {
-      logger.error('Error updating withdrawal status', {
+      logger.error('Erro ao atualizar status do saque', {
         error,
         withdrawalId: id
       });
@@ -128,7 +145,7 @@ export class WithdrawalsService {
 
       return data;
     } catch (error) {
-      logger.error('Error fetching merchant withdrawals', {
+      logger.error('Erro ao buscar saques do comerciante', {
         error,
         merchantId
       });
@@ -155,7 +172,7 @@ export class WithdrawalsService {
 
       return data;
     } catch (error) {
-      logger.error('Error fetching pending withdrawals', { error });
+      logger.error('Erro ao buscar saques pendentes', { error });
       throw error;
     }
   }
