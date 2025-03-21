@@ -30,7 +30,6 @@ export class OnzWebhookController {
         });
 
         // Salvar o txid no banco temporariamente para referência
-        // (Isso pode ser ajustado conforme sua estrutura de dados)
         const { data: updatedWithTxid, error: txidUpdateError } = await supabase
           .from('transactions')
           .update({
@@ -54,28 +53,53 @@ export class OnzWebhookController {
           url: ecomoviUrl
         });
         
-        const ecomoviResponse = await fetch(ecomoviUrl);
-        
-        if (!ecomoviResponse.ok) {
-          logger.error('Erro ao consultar API da Ecomovi', {
-            status: ecomoviResponse.status,
-            statusText: ecomoviResponse.statusText,
+        let cobDetails;
+        try {
+          // Obter o token de acesso usando o mesmo método do PixService
+          const accessToken = await onzClient.getAccessToken();
+          
+          if (!accessToken) {
+            logger.error('Falha ao obter token de acesso para consulta da Ecomovi');
+            throw new Error('Não foi possível obter o token de acesso');
+          }
+          
+          logger.debug('Token de acesso obtido para consulta da Ecomovi', {
+            tokenLength: accessToken.length
+          });
+          
+          const ecomoviResponse = await fetch(ecomoviUrl, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            // Adicionar timeout para evitar que a requisição fique pendente por muito tempo
+            signal: AbortSignal.timeout(10000) // 10 segundos de timeout
+          });
+          
+          if (!ecomoviResponse.ok) {
+            throw new Error(`Status: ${ecomoviResponse.status} - ${ecomoviResponse.statusText}`);
+          }
+          
+          cobDetails = await ecomoviResponse.json();
+          
+          logger.info('Detalhes da cobrança recebidos da Ecomovi', {
+            txid: pixDetails.txid,
+            correlationId: cobDetails.infoAdicionais?.find(info => info.nome === 'correlationID')?.valor
+          });
+        } catch (error) {
+          logger.error('Erro ao consultar API da Ecomovi, usando fallback', {
+            error: error.message,
             txid: pixDetails.txid
           });
           
-          return {
-            status: 'error',
-            message: 'Erro ao consultar API da Ecomovi',
-            statusCode: ecomoviResponse.status
-          };
+          // Fallback para o método anterior
+          cobDetails = await onzClient.pix.status(pixDetails.txid);
+          
+          logger.info('Detalhes da cobrança obtidos via fallback', {
+            txid: pixDetails.txid
+          });
         }
-        
-        const cobDetails = await ecomoviResponse.json();
-
-        logger.info('Detalhes da cobrança recebidos da Ecomovi', {
-          txid: pixDetails.txid,
-          correlationId: cobDetails.infoAdicionais?.find(info => info.nome === 'correlationID')?.valor
-        });
 
         // Obter o correlationID (transaction_id) das informações adicionais
         const correlationId = cobDetails.infoAdicionais?.find(
